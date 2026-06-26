@@ -12,6 +12,6 @@ python /cbica/home/wenju/Project/whole-body_clocks/mortality_clock/brain_mri_clo
   --id-match-csv /cbica/home/wenju/Dataset/UKBB_UMelbourne/UKB_UMelbourne_vs_Penn_match_key.csv \
   --brain-tsv /cbica/home/wenju/Reproducibile_paper/BrainAge/data/imaging/T1_MUSE_GM.tsv \
   --covariate-csv /cbica/home/wenju/Reproducibile_paper/PRS_UKBB/prediction/data/UKBB_fullsample_covariate.csv \
-  --admin-censor-date 2021-03-23 \
+  --admin-censor-date 2022-11-30 \
   --outdir /cbica/home/wenju/Reproducibile_paper/WholeBodyClock/brain_mri_mortality_clock
 conda deactivate
