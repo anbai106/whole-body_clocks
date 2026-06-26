@@ -10,13 +10,14 @@ set -euo pipefail
 
 source activate survival_clock
 
-### we run metabolic mortality score separately because the high N of metabolites and increase the alpha hyperparameter.
+# Update this list if your metabolomics systems differ.
+# The array index must match: #SBATCH --array=0-(number_of_organs - 1)
 numbers=(Metabolic)
 organ=${numbers[$SLURM_ARRAY_TASK_ID]}
 
 # Main paths
 project_root="/cbica/home/wenju/Project/whole-body_clocks/mortality_clock/Metabolomics"
-script_path="${project_root}/organ_metabolomics_clock.py"
+script_path="${project_root}/organ_metabolomics_clock_metabolic.py"
 wholebody_root="/cbica/home/wenju/Reproducibile_paper/WholeBodyClock"
 outdir="${wholebody_root}/${organ}_metabolomics_mortality_clock"
 mkdir -p "${outdir}"
