@@ -2,8 +2,8 @@
 #SBATCH --partition=all
 #SBATCH --job-name=SAnalysis
 #SBATCH --mem-per-cpu=24G
-#SBATCH --output=/cbica/home/wenju/Reproducibile_paper/WholeBodyClock/brain_mri_mortality_clock_%A_%a.out
-#SBATCH --error=/cbica/home/wenju/Reproducibile_paper/WholeBodyClock/brain_mri_mortality_clock_%A_%a.err
+#SBATCH --output=/cbica/home/wenju/Reproducibile_paper/WholeBodyClock/brain_mri_mortality_clock/brain_mri_mortality_clock_%A_%a.out
+#SBATCH --error=/cbica/home/wenju/Reproducibile_paper/WholeBodyClock/brain_mri_mortality_clock/brain_mri_mortality_clock_%A_%a.err
 
 ############################## END OF DEFAULT EMBEDDED SGE COMMANDS #######################
 source activate survival_clock

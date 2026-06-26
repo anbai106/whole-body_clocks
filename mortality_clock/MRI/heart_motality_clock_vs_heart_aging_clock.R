@@ -1,6 +1,6 @@
 # ============================================================
 # Scatter plot:
-# Brain_PhenoBAG vs brain MRI mortality clock acceleration
+# Heart_MRIBAG vs heart MRI mortality clock acceleration
 # Revised elegant version for RStudio
 # ============================================================
 
@@ -15,17 +15,17 @@ suppressPackageStartupMessages({
 # 1. Set file paths
 # ============================================================
 
-mortality_clock_file <- "/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/brain_mri_mortality_clock/brain_mri_mortality_clock_predictions.tsv"
+mortality_clock_file <- "/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/heart_mri_mortality_clock/heart_mri_mortality_clock_predictions.tsv"
 
 # Update if needed
-brain_age_file <- "/Users/hao/cubic-home/Reproducibile_paper/SleepAging/data/MomoBAG.tsv"
+heart_age_file <- "/Users/hao/cubic-home/Reproducibile_paper/SleepAging/data/MomoBAG.tsv"
 
 outdir <- dirname(mortality_clock_file)
 
-out_pdf <- file.path(outdir, "scatter_Brain_PhenoBAG_vs_brain_mri_mortality_clock_acceleration_years.pdf")
-out_png <- file.path(outdir, "scatter_Brain_PhenoBAG_vs_brain_mri_mortality_clock_acceleration_years.png")
-out_tsv <- file.path(outdir, "scatter_Brain_PhenoBAG_vs_brain_mri_mortality_clock_acceleration_years_data.tsv")
-out_stat <- file.path(outdir, "scatter_Brain_PhenoBAG_vs_mortality_clock_correlation_stats.tsv")
+out_pdf <- file.path(outdir, "scatter_Heart_MRIBAG_vs_heart_mri_mortality_clock_acceleration_years.pdf")
+out_png <- file.path(outdir, "scatter_Heart_MRIBAG_vs_heart_mri_mortality_clock_acceleration_years.png")
+out_tsv <- file.path(outdir, "scatter_Heart_MRIBAG_vs_heart_mri_mortality_clock_acceleration_years_data.tsv")
+out_stat <- file.path(outdir, "scatter_Heart_MRIBAG_vs_mortality_clock_correlation_stats.tsv")
 
 # ============================================================
 # 2. Helper function to read csv/tsv automatically
@@ -48,7 +48,7 @@ read_table_auto <- function(path) {
 # ============================================================
 
 mort <- read_table_auto(mortality_clock_file)
-bag  <- read_table_auto(brain_age_file)
+bag  <- read_table_auto(heart_age_file)
 
 # Harmonize participant ID column if needed
 if (!"participant_id" %in% colnames(bag)) {
@@ -57,7 +57,7 @@ if (!"participant_id" %in% colnames(bag)) {
   } else if ("id" %in% colnames(bag)) {
     bag <- bag %>% rename(participant_id = id)
   } else {
-    stop("Could not find participant_id/eid/id column in the Brain_PhenoBAG file.")
+    stop("Could not find participant_id/eid/id column in the Heart_MRIBAG file.")
   }
 }
 
@@ -66,15 +66,15 @@ if (!"participant_id" %in% colnames(mort)) {
   stop("mortality clock file does not contain participant_id.")
 }
 
-if (!"brain_mri_mortality_clock_acceleration_years" %in% colnames(mort)) {
-  stop("mortality clock file does not contain brain_mri_mortality_clock_acceleration_years.")
+if (!"heart_mri_mortality_clock_acceleration_years" %in% colnames(mort)) {
+  stop("mortality clock file does not contain heart_mri_mortality_clock_acceleration_years.")
 }
 
 # If your BAG file uses another column name, update here
-if (!"Brain_PhenoBAG" %in% colnames(bag)) {
-  message("Available columns in brain age file:")
+if (!"Heart_MRIBAG" %in% colnames(bag)) {
+  message("Available columns in heart age file:")
   print(colnames(bag))
-  stop("Brain age file does not contain Brain_PhenoBAG. Please rename the column or update the code.")
+  stop("Heart age file does not contain Heart_MRIBAG. Please rename the column or update the code.")
 }
 
 # ============================================================
@@ -87,24 +87,24 @@ df <- mort %>%
     split,
     age_at_imaging,
     sex,
-    brain_mri_mortality_clock_acceleration_years,
-    brain_mri_mortality_clock_acceleration_z,
-    brain_mri_mortality_risk_score
+    heart_mri_mortality_clock_acceleration_years,
+    heart_mri_mortality_clock_acceleration_z,
+    heart_mri_mortality_risk_score
   ) %>%
   inner_join(
     bag %>%
-      select(participant_id, Brain_PhenoBAG),
+      select(participant_id, Heart_MRIBAG),
     by = "participant_id"
   ) %>%
   mutate(
-    Brain_PhenoBAG = as.numeric(Brain_PhenoBAG),
-    brain_mri_mortality_clock_acceleration_years =
-      as.numeric(brain_mri_mortality_clock_acceleration_years),
+    Heart_MRIBAG = as.numeric(Heart_MRIBAG),
+    heart_mri_mortality_clock_acceleration_years =
+      as.numeric(heart_mri_mortality_clock_acceleration_years),
     split = factor(split, levels = c("train", "validation", "test"))
   ) %>%
   filter(
-    is.finite(Brain_PhenoBAG),
-    is.finite(brain_mri_mortality_clock_acceleration_years)
+    is.finite(Heart_MRIBAG),
+    is.finite(heart_mri_mortality_clock_acceleration_years)
   )
 
 message("Merged N = ", nrow(df))
@@ -118,20 +118,20 @@ readr::write_tsv(df, out_tsv)
 # ============================================================
 
 pearson_test <- cor.test(
-  df$Brain_PhenoBAG,
-  df$brain_mri_mortality_clock_acceleration_years,
+  df$Heart_MRIBAG,
+  df$heart_mri_mortality_clock_acceleration_years,
   method = "pearson"
 )
 
 spearman_test <- cor.test(
-  df$Brain_PhenoBAG,
-  df$brain_mri_mortality_clock_acceleration_years,
+  df$Heart_MRIBAG,
+  df$heart_mri_mortality_clock_acceleration_years,
   method = "spearman",
   exact = FALSE
 )
 
 lm_fit <- lm(
-  brain_mri_mortality_clock_acceleration_years ~ Brain_PhenoBAG,
+  heart_mri_mortality_clock_acceleration_years ~ Heart_MRIBAG,
   data = df
 )
 
@@ -141,7 +141,7 @@ pearson_r <- unname(pearson_test$estimate)
 pearson_p <- pearson_test$p.value
 spearman_rho <- unname(spearman_test$estimate)
 spearman_p <- spearman_test$p.value
-lm_beta <- coef(lm_fit)[["Brain_PhenoBAG"]]
+lm_beta <- coef(lm_fit)[["Heart_MRIBAG"]]
 lm_r2 <- lm_summary$r.squared
 
 cor_tbl <- tibble(
@@ -150,7 +150,7 @@ cor_tbl <- tibble(
   pearson_p = pearson_p,
   spearman_rho = spearman_rho,
   spearman_p = spearman_p,
-  lm_beta_years_per_Brain_PhenoBAG_year = lm_beta,
+  lm_beta_years_per_Heart_MRIBAG_year = lm_beta,
   lm_r2 = lm_r2
 )
 
@@ -205,10 +205,10 @@ stat_text <- paste0(
 # 8. Create extra top space so annotation does not overlap points
 # ============================================================
 
-x_min <- min(df$Brain_PhenoBAG, na.rm = TRUE)
-x_max <- max(df$Brain_PhenoBAG, na.rm = TRUE)
-y_min <- min(df$brain_mri_mortality_clock_acceleration_years, na.rm = TRUE)
-y_max <- max(df$brain_mri_mortality_clock_acceleration_years, na.rm = TRUE)
+x_min <- min(df$Heart_MRIBAG, na.rm = TRUE)
+x_max <- max(df$Heart_MRIBAG, na.rm = TRUE)
+y_min <- min(df$heart_mri_mortality_clock_acceleration_years, na.rm = TRUE)
+y_max <- max(df$heart_mri_mortality_clock_acceleration_years, na.rm = TRUE)
 
 x_range <- x_max - x_min
 y_range <- y_max - y_min
@@ -249,8 +249,8 @@ theme_elegant <- function(base_size = 14) {
 p <- ggplot(
   df,
   aes(
-    x = Brain_PhenoBAG,
-    y = brain_mri_mortality_clock_acceleration_years
+    x = Heart_MRIBAG,
+    y = heart_mri_mortality_clock_acceleration_years
   )
 ) +
   geom_point(
@@ -285,8 +285,8 @@ p <- ggplot(
     expand = expansion(mult = c(0.01, 0.01))
   ) +
   labs(
-    x = "Brain MRIBAG, years",
-    y = "Brain MRI mortality clock, years"
+    x = "Heart MRIBAG, years",
+    y = "Heart MRI mortality clock, years"
   ) +
   theme_elegant(base_size = 15)
 
