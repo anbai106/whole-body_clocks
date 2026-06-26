@@ -20,3 +20,6 @@ print(
     .sort_index()
     .tail(24)
 )
+
+
+#### We determined the censor date:   --admin-censor-date 2022-11-30

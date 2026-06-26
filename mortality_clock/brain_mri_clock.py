@@ -43,7 +43,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 try:
-    from sksurv.linear_model import CoxnetSurvivalAnalysis
+    from sksurv.linear_model import CoxnetSurvivalAnalysis, CoxPHSurvivalAnalysis
     from sksurv.metrics import concordance_index_censored
     from sksurv.util import Surv
 except ImportError as e:
@@ -139,6 +139,15 @@ def parse_args():
         type=int,
         default=1,
         help="Exclude participants with follow-up time shorter than this many days.",
+    )
+    parser.add_argument(
+        "--n-bootstrap-incremental",
+        type=int,
+        default=1000,
+        help=(
+            "Number of paired bootstrap resamples for testing whether the full "
+            "brain MRI model improves test-set C-index over the covariate baseline."
+        ),
     )
 
     return parser.parse_args()
@@ -577,6 +586,280 @@ def fit_final_model(X_trainval, y_trainval, best, penalty_factor):
     return model
 
 
+
+
+def compute_cindex(y, risk):
+    """
+    Compute Harrell's C-index for a survival risk score.
+    Higher risk is assumed to mean higher hazard / earlier event.
+    """
+    return float(
+        concordance_index_censored(
+            y["event"],
+            y["time"],
+            np.asarray(risk).reshape(-1),
+        )[0]
+    )
+
+
+def fit_coxph_or_ridge_fallback(X, y, model_name="cox_model"):
+    """
+    Fit a CoxPH model for low/moderate-dimensional baseline comparisons.
+
+    If an unpenalized CoxPH model fails because of collinearity or numerical issues,
+    fall back to a weakly penalized Coxnet model. This keeps the incremental-value
+    comparison robust on highly correlated imaging/covariate features.
+    """
+    try:
+        try:
+            model = CoxPHSurvivalAnalysis(alpha=0.0, ties="breslow")
+        except TypeError:
+            model = CoxPHSurvivalAnalysis(alpha=0.0)
+        model.fit(X, y)
+        return model, "CoxPHSurvivalAnalysis(alpha=0.0)"
+    except Exception as exc:
+        warnings.warn(
+            f"{model_name}: unpenalized CoxPH failed ({exc}). "
+            "Falling back to weakly penalized Coxnet."
+        )
+
+    last_exc = None
+    for alpha in [1e-6, 1e-5, 1e-4, 1e-3, 1e-2]:
+        try:
+            model = CoxnetSurvivalAnalysis(
+                l1_ratio=0.01,
+                alphas=[alpha],
+                fit_baseline_model=True,
+                max_iter=100000,
+            )
+            model.fit(X, y)
+            return model, f"CoxnetSurvivalAnalysis(l1_ratio=0.01, alpha={alpha})"
+        except Exception as exc:
+            last_exc = exc
+
+    raise RuntimeError(f"{model_name}: all Cox fitting attempts failed. Last error: {last_exc}")
+
+
+def get_incremental_model_feature_indices(feature_names):
+    """
+    Define feature sets for incremental-value analysis.
+
+    M0: age + sex
+    M1: all retained non-brain covariates, including age, sex, DLICV,
+        scanner/head-motion variables, and assessment center
+    M2: brain MRI features only
+    M3: full model = non-brain covariates + brain MRI features
+    """
+    feature_names = np.asarray(feature_names).astype(str)
+
+    is_brain = np.zeros(len(feature_names), dtype=bool)
+    for prefix in ("num__MUSE_Volume_", "num__WMLS_Volume_"):
+        is_brain |= np.char.startswith(feature_names, prefix)
+
+    is_age = feature_names == "num__age_at_imaging"
+    is_sex = np.char.startswith(feature_names, "cat__sex")
+
+    idx = {
+        "M0_age_sex": np.where(is_age | is_sex)[0],
+        "M1_covariate_baseline": np.where(~is_brain)[0],
+        "M2_brain_mri_only": np.where(is_brain)[0],
+        "M3_full_covariates_plus_brain_mri": np.arange(len(feature_names)),
+    }
+
+    for name, ind in idx.items():
+        if len(ind) == 0:
+            warnings.warn(f"Feature set {name} has zero columns.")
+
+    return idx
+
+
+def paired_bootstrap_delta_cindex(y, risk_full, risk_baseline, n_boot=1000, random_state=2026):
+    """
+    Paired bootstrap test for delta C-index on the same test participants.
+
+    delta = C-index(full model) - C-index(baseline model)
+    """
+    rng = np.random.default_rng(random_state)
+
+    event = np.asarray(y["event"]).astype(bool)
+    time = np.asarray(y["time"]).astype(float)
+    risk_full = np.asarray(risk_full).reshape(-1)
+    risk_baseline = np.asarray(risk_baseline).reshape(-1)
+
+    observed_full = compute_cindex(y, risk_full)
+    observed_baseline = compute_cindex(y, risk_baseline)
+    observed_delta = observed_full - observed_baseline
+
+    boot_deltas = []
+    n = len(time)
+
+    for _ in range(n_boot):
+        idx = rng.integers(0, n, size=n)
+        if np.sum(event[idx]) < 2:
+            continue
+
+        y_b = Surv.from_arrays(event=event[idx], time=time[idx])
+        try:
+            c_full = compute_cindex(y_b, risk_full[idx])
+            c_base = compute_cindex(y_b, risk_baseline[idx])
+            if np.isfinite(c_full) and np.isfinite(c_base):
+                boot_deltas.append(c_full - c_base)
+        except Exception:
+            continue
+
+    boot_deltas = np.asarray(boot_deltas, dtype=float)
+
+    if boot_deltas.size == 0:
+        return {
+            "comparison": "M3_full_covariates_plus_brain_mri_vs_M1_covariate_baseline",
+            "cindex_full": observed_full,
+            "cindex_baseline": observed_baseline,
+            "delta_cindex": observed_delta,
+            "delta_cindex_ci_lower": np.nan,
+            "delta_cindex_ci_upper": np.nan,
+            "n_bootstrap_requested": int(n_boot),
+            "n_bootstrap_successful": 0,
+            "empirical_p_two_sided_delta_not_equal_0": np.nan,
+            "empirical_p_one_sided_delta_le_0": np.nan,
+            "interpretation": "Bootstrap failed; inspect event counts and risk scores.",
+        }
+
+    ci_lower, ci_upper = np.quantile(boot_deltas, [0.025, 0.975])
+
+    # Empirical p-values from the paired bootstrap distribution.
+    p_le_zero = float(np.mean(boot_deltas <= 0.0))
+    p_ge_zero = float(np.mean(boot_deltas >= 0.0))
+    p_two_sided = float(min(1.0, 2.0 * min(p_le_zero, p_ge_zero)))
+
+    if observed_delta > 0 and ci_lower > 0:
+        interp = "Brain MRI improves test-set C-index beyond the covariate baseline."
+    elif observed_delta > 0:
+        interp = "Brain MRI has positive delta C-index, but the bootstrap CI includes or approaches zero."
+    else:
+        interp = "No evidence that brain MRI improves test-set C-index beyond the covariate baseline."
+
+    return {
+        "comparison": "M3_full_covariates_plus_brain_mri_vs_M1_covariate_baseline",
+        "cindex_full": float(observed_full),
+        "cindex_baseline": float(observed_baseline),
+        "delta_cindex": float(observed_delta),
+        "delta_cindex_ci_lower": float(ci_lower),
+        "delta_cindex_ci_upper": float(ci_upper),
+        "n_bootstrap_requested": int(n_boot),
+        "n_bootstrap_successful": int(boot_deltas.size),
+        "empirical_p_two_sided_delta_not_equal_0": p_two_sided,
+        "empirical_p_one_sided_delta_le_0": p_le_zero,
+        "interpretation": interp,
+    }
+
+
+def run_incremental_value_analysis(
+    X_train,
+    X_val,
+    X_test,
+    X_trainval,
+    y_train,
+    y_val,
+    y_test,
+    y_trainval,
+    feature_names,
+    final_model,
+    n_bootstrap=1000,
+    random_state=2026,
+):
+    """
+    Fit baseline comparison models and test whether adding brain MRI features
+    improves held-out test-set C-index beyond the covariate baseline.
+    """
+    feature_indices = get_incremental_model_feature_indices(feature_names)
+
+    split_data = {
+        "train": (X_train, y_train),
+        "validation": (X_val, y_val),
+        "test": (X_test, y_test),
+        "trainval": (X_trainval, y_trainval),
+    }
+
+    model_specs = {
+        "M0_age_sex": "Age + sex",
+        "M1_covariate_baseline": "Age + sex + DLICV + retained scanner/head-motion/assessment-center covariates",
+        "M2_brain_mri_only": "Brain MRI MUSE/WMLS features only",
+    }
+
+    fitted_models = {}
+    fitting_methods = {}
+    risk_predictions = {split: {} for split in split_data.keys()}
+
+    for model_name in ["M0_age_sex", "M1_covariate_baseline", "M2_brain_mri_only"]:
+        ind = feature_indices[model_name]
+        print(f"Fitting incremental-value comparison model: {model_name} ({len(ind)} features)")
+        model, method = fit_coxph_or_ridge_fallback(
+            X_trainval[:, ind],
+            y_trainval,
+            model_name=model_name,
+        )
+        fitted_models[model_name] = model
+        fitting_methods[model_name] = method
+
+        for split, (X_split, _) in split_data.items():
+            risk_predictions[split][model_name] = predict_risk_score(model, X_split[:, ind])
+
+    # Full model is already trained using the elastic-net Cox pipeline.
+    fitting_methods["M3_full_covariates_plus_brain_mri"] = "Selected elastic-net Cox model from main pipeline"
+    for split, (X_split, _) in split_data.items():
+        risk_predictions[split]["M3_full_covariates_plus_brain_mri"] = predict_risk_score(final_model, X_split)
+
+    rows = []
+    model_labels = {
+        "M0_age_sex": "Age + sex",
+        "M1_covariate_baseline": "Covariate baseline",
+        "M2_brain_mri_only": "Brain MRI only",
+        "M3_full_covariates_plus_brain_mri": "Covariates + brain MRI",
+    }
+
+    for model_name in [
+        "M0_age_sex",
+        "M1_covariate_baseline",
+        "M2_brain_mri_only",
+        "M3_full_covariates_plus_brain_mri",
+    ]:
+        for split in ["train", "validation", "test", "trainval"]:
+            _, y_split = split_data[split]
+            risk = risk_predictions[split][model_name]
+            rows.append(
+                {
+                    "model": model_name,
+                    "model_label": model_labels[model_name],
+                    "split": split,
+                    "n_features": int(len(feature_indices.get(model_name, feature_indices["M3_full_covariates_plus_brain_mri"]))),
+                    "training_data": "train+validation",
+                    "fitting_method": fitting_methods[model_name],
+                    "cindex": compute_cindex(y_split, risk),
+                    "n": int(len(y_split)),
+                    "n_events": int(np.sum(y_split["event"])),
+                }
+            )
+
+    model_comparison_df = pd.DataFrame(rows)
+
+    delta_stats = paired_bootstrap_delta_cindex(
+        y=y_test,
+        risk_full=risk_predictions["test"]["M3_full_covariates_plus_brain_mri"],
+        risk_baseline=risk_predictions["test"]["M1_covariate_baseline"],
+        n_boot=n_bootstrap,
+        random_state=random_state,
+    )
+    delta_df = pd.DataFrame([delta_stats])
+
+    return {
+        "model_comparison_df": model_comparison_df,
+        "delta_cindex_df": delta_df,
+        "fitted_models": fitted_models,
+        "fitting_methods": fitting_methods,
+        "risk_predictions": risk_predictions,
+        "feature_indices": feature_indices,
+    }
+
 def predict_risk_score(model, X):
     risk = model.predict(X)
     risk = np.asarray(risk).reshape(-1)
@@ -984,6 +1267,43 @@ def main():
     print(f"Train+Val C-index: {cindex_trainval:.4f}")
     print(f"Test C-index:      {cindex_test:.4f}")
 
+    print("Running incremental-value analysis: does brain MRI add value beyond covariates?")
+    incremental_results = run_incremental_value_analysis(
+        X_train=X_train,
+        X_val=X_val,
+        X_test=X_test,
+        X_trainval=X_trainval,
+        y_train=y_train,
+        y_val=y_val,
+        y_test=y_test,
+        y_trainval=y_trainval,
+        feature_names=feature_names,
+        final_model=final_model,
+        n_bootstrap=args.n_bootstrap_incremental,
+        random_state=args.random_state,
+    )
+
+    model_comparison_df = incremental_results["model_comparison_df"]
+    delta_cindex_df = incremental_results["delta_cindex_df"]
+
+    # JSON-serializable records for performance.json.
+    model_comparison_records = json.loads(model_comparison_df.to_json(orient="records"))
+    delta_cindex_records = json.loads(delta_cindex_df.to_json(orient="records"))
+
+    model_comparison_df.to_csv(
+        outdir / "brain_mri_mortality_clock_model_comparison.tsv",
+        sep="\t",
+        index=False,
+    )
+    delta_cindex_df.to_csv(
+        outdir / "brain_mri_mortality_clock_incremental_value_delta_cindex.tsv",
+        sep="\t",
+        index=False,
+    )
+
+    print("Incremental-value result, full model vs covariate baseline on test set:")
+    print(delta_cindex_df.to_string(index=False))
+
     def make_pred_frame(df_part, split_name, risk):
         base_cols = [
             "participant_id",
@@ -1010,6 +1330,19 @@ def main():
     pred_train = make_pred_frame(df_train, "train", risk_train)
     pred_val = make_pred_frame(df_val, "validation", risk_val)
     pred_test = make_pred_frame(df_test, "test", risk_test)
+
+    # Add model-comparison risk scores to the prediction file so incremental-value
+    # results can be audited without rerunning the models.
+    comparison_risk_cols = {
+        "M0_age_sex": "risk_score_M0_age_sex",
+        "M1_covariate_baseline": "risk_score_M1_covariate_baseline",
+        "M2_brain_mri_only": "risk_score_M2_brain_mri_only",
+        "M3_full_covariates_plus_brain_mri": "risk_score_M3_full_covariates_plus_brain_mri",
+    }
+    for model_name, col_name in comparison_risk_cols.items():
+        pred_train[col_name] = incremental_results["risk_predictions"]["train"][model_name]
+        pred_val[col_name] = incremental_results["risk_predictions"]["validation"][model_name]
+        pred_test[col_name] = incremental_results["risk_predictions"]["test"][model_name]
 
     # Absolute risks at fixed horizons.
     risk_times = [5.0, 10.0, 15.0]
@@ -1089,6 +1422,9 @@ def main():
         "best": best,
         "penalty_factor": penalty_factor,
         "clock_transform_info": clock_transform_info,
+        "incremental_value_model_comparison": model_comparison_records,
+        "incremental_value_delta_cindex": delta_cindex_records,
+        "incremental_value_fitting_methods": incremental_results["fitting_methods"],
         "admin_censor_date": str(admin_censor_date.date()),
     }
 
@@ -1109,6 +1445,28 @@ def main():
         "cindex_validation": float(cindex_val),
         "cindex_trainval": float(cindex_trainval),
         "cindex_test": float(cindex_test),
+        "incremental_value_model_comparison": model_comparison_records,
+        "incremental_value_delta_cindex": delta_cindex_records,
+        "cindex_test_M1_covariate_baseline": float(
+            model_comparison_df.loc[
+                (model_comparison_df["model"] == "M1_covariate_baseline")
+                & (model_comparison_df["split"] == "test"),
+                "cindex",
+            ].iloc[0]
+        ),
+        "cindex_test_M3_full_covariates_plus_brain_mri": float(
+            model_comparison_df.loc[
+                (model_comparison_df["model"] == "M3_full_covariates_plus_brain_mri")
+                & (model_comparison_df["split"] == "test"),
+                "cindex",
+            ].iloc[0]
+        ),
+        "delta_cindex_test_M3_vs_M1": float(delta_cindex_df["delta_cindex"].iloc[0]),
+        "delta_cindex_test_M3_vs_M1_ci_lower": float(delta_cindex_df["delta_cindex_ci_lower"].iloc[0]),
+        "delta_cindex_test_M3_vs_M1_ci_upper": float(delta_cindex_df["delta_cindex_ci_upper"].iloc[0]),
+        "delta_cindex_test_M3_vs_M1_p_two_sided": float(
+            delta_cindex_df["empirical_p_two_sided_delta_not_equal_0"].iloc[0]
+        ),
         "best_l1_ratio": float(best["l1_ratio"]),
         "best_alpha": float(best["alpha"]),
         "best_validation_cindex_during_tuning": float(best["cindex"]),
@@ -1139,6 +1497,8 @@ def main():
     print(f"  {outdir / 'brain_mri_mortality_clock_test_predictions.tsv'}")
     print(f"  {outdir / 'brain_mri_mortality_clock_coefficients.tsv'}")
     print(f"  {outdir / 'brain_mri_mortality_clock_nonzero_coefficients.tsv'}")
+    print(f"  {outdir / 'brain_mri_mortality_clock_model_comparison.tsv'}")
+    print(f"  {outdir / 'brain_mri_mortality_clock_incremental_value_delta_cindex.tsv'}")
     print(f"  {outdir / 'brain_mri_mortality_clock_model.joblib'}")
     print(f"  {outdir / 'brain_mri_mortality_clock_performance.json'}")
 
