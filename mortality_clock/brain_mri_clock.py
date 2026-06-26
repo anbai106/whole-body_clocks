@@ -319,8 +319,8 @@ def build_design_matrix(df, brain_feature_cols):
 
     The model includes age, sex, DLICV, optional scanner/assessment covariates, and brain MRI features.
 
-    We still report a clock-acceleration score by residualizing the final risk score
-    against age and sex in the training set.
+    We report a clock-acceleration score by residualizing the final risk score
+    against all retained non-brain covariates in the training set.
     """
     df = df.copy()
 
@@ -612,18 +612,34 @@ def predict_absolute_risk(model, X, times_years):
     return pd.DataFrame(out)
 
 
-def add_clock_age_and_acceleration(pred_df, train_mask_col="split"):
+def add_clock_age_and_acceleration(pred_df, covariate_cols=None, train_mask_col="split"):
     """
-    Convert risk score to an approximate mortality-clock age and acceleration.
+    Convert risk score to a covariate-adjusted mortality-clock age and acceleration.
 
     This is a post-hoc interpretability transform:
-      1. Fit risk_score ~ age_at_imaging + sex on the training set.
-      2. Compute residual risk beyond age/sex expectation.
-      3. Convert residual risk to years using the age coefficient.
+      1. Fit risk_score ~ retained non-brain covariates on the training set.
+         By default this includes age_at_imaging, sex, DLICV, scanner/head-motion
+         variables, and assessment center if those variables were retained.
+      2. Compute residual risk beyond the expected risk from those covariates.
+      3. Standardize the residual using the training-set residual SD.
+      4. Convert residual risk to approximate years using the adjusted age coefficient.
 
     Primary model output remains the survival risk score and predicted absolute risk.
+    The clock acceleration variables are covariate-adjusted residual phenotypes.
     """
     df = pred_df.copy()
+
+    if covariate_cols is None:
+        covariate_cols = ["age_at_imaging", "sex"]
+
+    # Keep only covariates that are present. Do not include brain MRI features here.
+    covariate_cols = [c for c in covariate_cols if c in df.columns]
+
+    if "age_at_imaging" not in covariate_cols and "age_at_imaging" in df.columns:
+        covariate_cols = ["age_at_imaging"] + covariate_cols
+
+    if len(covariate_cols) == 0:
+        raise ValueError("No covariates available for clock-acceleration residualization.")
 
     train_df = df.loc[df[train_mask_col] == "train"].copy()
 
@@ -634,42 +650,101 @@ def add_clock_age_and_acceleration(pred_df, train_mask_col="split"):
         df["brain_mri_mortality_clock_acceleration_z"] = np.nan
         return df, None
 
-    # Convert sex to binary only for age/sex residualization.
-    sex_train = pd.get_dummies(train_df["sex"].astype(str), drop_first=True)
-    sex_all = pd.get_dummies(df["sex"].astype(str), drop_first=True)
+    # Identify numeric versus categorical residualization covariates.
+    # We intentionally do not standardize numeric covariates here because the
+    # age coefficient is used to convert residual risk-score units into years.
+    numeric_covs = []
+    categorical_covs = []
 
-    # Align columns.
-    sex_all = sex_all.reindex(columns=sex_train.columns, fill_value=0)
+    for c in covariate_cols:
+        if c == "sex":
+            categorical_covs.append(c)
+        elif pd.api.types.is_numeric_dtype(df[c]):
+            numeric_covs.append(c)
+        else:
+            categorical_covs.append(c)
 
-    X_train = pd.concat(
-        [
-            train_df[["age_at_imaging"]].reset_index(drop=True),
-            sex_train.reset_index(drop=True),
-        ],
-        axis=1,
+    # Make a residualization preprocessor that can handle missing covariates.
+    transformers = []
+
+    if len(numeric_covs) > 0:
+        num_pipe = Pipeline(
+            steps=[
+                ("imputer", SimpleImputer(strategy="median")),
+            ]
+        )
+        transformers.append(("num", num_pipe, numeric_covs))
+
+    if len(categorical_covs) > 0:
+        cat_pipe = Pipeline(
+            steps=[
+                ("imputer", SimpleImputer(strategy="most_frequent")),
+                ("onehot", make_onehot_encoder()),
+            ]
+        )
+        transformers.append(("cat", cat_pipe, categorical_covs))
+
+    residualization_preprocessor = ColumnTransformer(
+        transformers=transformers,
+        remainder="drop",
     )
 
-    X_all = pd.concat(
-        [
-            df[["age_at_imaging"]].reset_index(drop=True),
-            sex_all.reset_index(drop=True),
-        ],
-        axis=1,
-    )
+    X_train_raw = train_df[covariate_cols].copy()
+    X_all_raw = df[covariate_cols].copy()
+
+    # Ensure categorical columns are consistently string/categorical-like.
+    for c in categorical_covs:
+        X_train_raw[c] = X_train_raw[c].astype("object")
+        X_all_raw[c] = X_all_raw[c].astype("object")
+
+    # Ensure numeric columns are numeric.
+    for c in numeric_covs:
+        X_train_raw[c] = pd.to_numeric(X_train_raw[c], errors="coerce")
+        X_all_raw[c] = pd.to_numeric(X_all_raw[c], errors="coerce")
+
+    X_train = residualization_preprocessor.fit_transform(X_train_raw)
+    X_all = residualization_preprocessor.transform(X_all_raw)
 
     lr = LinearRegression()
     lr.fit(X_train, train_df["brain_mri_mortality_risk_score"].values)
 
     expected = lr.predict(X_all)
-    residual = df["brain_mri_mortality_risk_score"].values - expected
+    residual_raw = df["brain_mri_mortality_risk_score"].values - expected
 
-    beta_age = float(lr.coef_[0])
-    train_resid = residual[df[train_mask_col].values == "train"]
-    resid_sd = float(np.nanstd(train_resid))
+    train_index = df[train_mask_col].values == "train"
+    train_resid_raw = residual_raw[train_index]
+    train_resid_mean = float(np.nanmean(train_resid_raw))
+    train_resid_sd = float(np.nanstd(train_resid_raw))
+
+    # Center using the training-set residual mean. With an intercept this should
+    # be approximately zero, but explicit centering improves reproducibility.
+    residual = residual_raw - train_resid_mean
 
     df["brain_mri_mortality_clock_acceleration_z"] = (
-        residual / resid_sd if resid_sd > 0 else np.nan
+        residual / train_resid_sd if train_resid_sd > 0 else np.nan
     )
+
+    # Recover the adjusted age coefficient in raw risk-score units per year.
+    # This only works because numeric covariates were not standardized.
+    beta_age = np.nan
+    residualization_feature_names = []
+
+    if len(numeric_covs) > 0:
+        residualization_feature_names.extend([f"num__{c}" for c in numeric_covs])
+
+    if len(categorical_covs) > 0:
+        cat_pipeline = residualization_preprocessor.named_transformers_["cat"]
+        ohe = cat_pipeline.named_steps["onehot"]
+        try:
+            cat_names = ohe.get_feature_names_out(categorical_covs)
+        except AttributeError:
+            cat_names = ohe.get_feature_names(categorical_covs)
+        residualization_feature_names.extend([f"cat__{c}" for c in cat_names])
+
+    age_feature_name = "num__age_at_imaging"
+    if age_feature_name in residualization_feature_names:
+        age_idx = residualization_feature_names.index(age_feature_name)
+        beta_age = float(lr.coef_[age_idx])
 
     if np.isfinite(beta_age) and abs(beta_age) > 1e-8:
         df["brain_mri_mortality_clock_acceleration_years"] = residual / beta_age
@@ -678,21 +753,30 @@ def add_clock_age_and_acceleration(pred_df, train_mask_col="split"):
         )
     else:
         warnings.warn(
-            "Age coefficient in risk_score ~ age + sex is near zero. "
+            "Adjusted age coefficient in risk_score ~ covariates is near zero or unavailable. "
             "Year-scale clock acceleration will be set to missing."
         )
         df["brain_mri_mortality_clock_acceleration_years"] = np.nan
         df["brain_mri_mortality_clock_age_years"] = np.nan
 
     transform_info = {
-        "risk_score_age_sex_model_intercept": float(lr.intercept_),
-        "risk_score_age_sex_model_coef": {
-            col: float(coef) for col, coef in zip(X_train.columns, lr.coef_)
+        "residualization_covariates": covariate_cols,
+        "numeric_residualization_covariates": numeric_covs,
+        "categorical_residualization_covariates": categorical_covs,
+        "risk_score_covariate_model_intercept": float(lr.intercept_),
+        "risk_score_covariate_model_coef": {
+            col: float(coef) for col, coef in zip(residualization_feature_names, lr.coef_)
         },
-        "risk_score_residual_sd_train": resid_sd,
+        "adjusted_age_coefficient_risk_score_per_year": (
+            float(beta_age) if np.isfinite(beta_age) else None
+        ),
+        "risk_score_residual_mean_train": train_resid_mean,
+        "risk_score_residual_sd_train": train_resid_sd,
         "note": (
-            "Clock age is an approximate post-hoc transform of the survival-model risk score. "
-            "Primary output is the Cox risk score and absolute mortality risk."
+            "Clock acceleration is the residual of the Cox risk score after adjustment "
+            "for all retained non-brain covariates listed in residualization_covariates. "
+            "The z-score is recommended for downstream analyses. The year-scale variable "
+            "is an approximate transform using the adjusted age coefficient."
         ),
     }
 
@@ -812,6 +896,17 @@ def main():
     )
     X_val_raw, X_test_raw, X_trainval_raw = other_list
 
+    # Covariates used for post-hoc clock-acceleration residualization.
+    # These are the retained non-brain predictors. Brain MRI features are NOT
+    # included here because the clock phenotype should preserve brain MRI signal.
+    residualization_covariates = [
+        c for c in (numeric_cols_kept + categorical_cols_kept)
+        if c not in brain_feature_cols
+    ]
+    print("Residualizing clock acceleration on retained non-brain covariates:")
+    for c in residualization_covariates:
+        print(f"  {c}")
+
     preprocessor = make_preprocessor(numeric_cols_kept, categorical_cols_kept)
 
     print("Fitting preprocessing pipeline...")
@@ -890,19 +985,24 @@ def main():
     print(f"Test C-index:      {cindex_test:.4f}")
 
     def make_pred_frame(df_part, split_name, risk):
-        out = df_part[
-            [
-                "participant_id",
-                "imaging_date",
-                "death_date",
-                "admin_censor_date",
-                "end_date",
-                "time_years",
-                "event",
-                "age_at_imaging",
-                "sex",
-            ]
-        ].copy()
+        base_cols = [
+            "participant_id",
+            "imaging_date",
+            "death_date",
+            "admin_censor_date",
+            "end_date",
+            "time_years",
+            "event",
+            "age_at_imaging",
+            "sex",
+        ]
+
+        extra_cov_cols = [
+            c for c in residualization_covariates
+            if c in df_part.columns and c not in base_cols
+        ]
+
+        out = df_part[base_cols + extra_cov_cols].copy()
         out["split"] = split_name
         out["brain_mri_mortality_risk_score"] = risk
         return out
@@ -930,7 +1030,10 @@ def main():
     pred_all = pd.concat([pred_train, pred_val, pred_test], axis=0, ignore_index=True)
 
     print("Adding approximate mortality-clock age and acceleration...")
-    pred_all, clock_transform_info = add_clock_age_and_acceleration(pred_all)
+    pred_all, clock_transform_info = add_clock_age_and_acceleration(
+        pred_all,
+        covariate_cols=residualization_covariates,
+    )
 
     pred_all.to_csv(
         outdir / "brain_mri_mortality_clock_predictions.tsv",
@@ -982,6 +1085,7 @@ def main():
         "categorical_cols_kept": categorical_cols_kept,
         "brain_feature_cols": brain_feature_cols,
         "dropped_numeric": dropped_numeric,
+        "residualization_covariates": residualization_covariates,
         "best": best,
         "penalty_factor": penalty_factor,
         "clock_transform_info": clock_transform_info,
@@ -1013,12 +1117,15 @@ def main():
         "n_numeric_cols_kept": int(len(numeric_cols_kept)),
         "n_categorical_cols_kept": int(len(categorical_cols_kept)),
         "n_nonzero_coefficients": int(nonzero_coef_df.shape[0]),
+        "n_residualization_covariates": int(len(residualization_covariates)),
+        "residualization_covariates": residualization_covariates,
         "admin_censor_date": str(admin_censor_date.date()),
         "time_zero": "UKB imaging assessment date, field 53-2.0",
         "event_date": "UKB death date, field 40000-0.0",
         "note": (
             "Primary score is brain_mri_mortality_risk_score from elastic-net Cox. "
-            "Clock age/acceleration are post-hoc age/sex residualized transforms."
+            "Clock age/acceleration are post-hoc residualized transforms adjusted for "
+            "all retained non-brain covariates."
         ),
     }
 
