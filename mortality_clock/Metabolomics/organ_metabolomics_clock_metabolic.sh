@@ -2,6 +2,7 @@
 #SBATCH --partition=all
 #SBATCH --job-name=organ_metabolomics_clock
 #SBATCH --mem-per-cpu=24G
+#SBATCH --array=0-0
 #SBATCH --output=/cbica/home/wenju/output/organ_metabolomics_mortality_clock_%A_%a.out
 #SBATCH --error=/cbica/home/wenju/output/organ_metabolomics_mortality_clock_%A_%a.err
 
@@ -10,7 +11,8 @@ set -euo pipefail
 source activate survival_clock
 
 ### we run metabolic mortality score separately because the high N of metabolites and increase the alpha hyperparameter.
-organ=Metabolic
+numbers=(Metabolic)
+organ=${numbers[$SLURM_ARRAY_TASK_ID]}
 
 # Main paths
 project_root="/cbica/home/wenju/Project/whole-body_clocks/mortality_clock/Metabolomics"
