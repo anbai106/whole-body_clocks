@@ -2,13 +2,13 @@
 #SBATCH --partition=all
 #SBATCH --job-name=organ_metabolomics_clock
 #SBATCH --mem-per-cpu=24G
-#SBATCH --array=0-4
+#SBATCH --array=0-3
 #SBATCH --output=/cbica/home/wenju/output/organ_metabolomics_mortality_clock_%A_%a.out
 #SBATCH --error=/cbica/home/wenju/output/organ_metabolomics_mortality_clock_%A_%a.err
 
 source activate survival_clock
 
-numbers=(Endocrine Digestive Hepatic Immune Metabolic)
+numbers=(Endocrine Digestive Hepatic Immune)
 organ=${numbers[$SLURM_ARRAY_TASK_ID]}
 
 outdir="/cbica/home/wenju/Reproducibile_paper/WholeBodyClock/${organ}_metabolomics_mortality_clock"
