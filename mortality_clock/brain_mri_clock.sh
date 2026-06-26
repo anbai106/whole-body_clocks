@@ -6,7 +6,7 @@
 #SBATCH --error=/cbica/home/wenju/output/SAnalysis_%A_%a.err
 
 ############################## END OF DEFAULT EMBEDDED SGE COMMANDS #######################
-source activate survival
+source activate survival_clock
 python /cbica/home/wenju/Project/whole-body_clocks/mortality_clock/brain_mri_clock.py \
   --death-xlsx /cbica/home/wenju/Dataset/UKBB_UMelbourne/Death_related_var_from_Ye.xlsx \
   --id-match-csv /cbica/home/wenju/Dataset/UKBB_UMelbourne/UKB_UMelbourne_vs_Penn_match_key.csv \
