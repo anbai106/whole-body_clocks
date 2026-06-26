@@ -58,7 +58,7 @@ echo "  covariate_penalty_factor=${covariate_penalty_factor}"
 echo "  l1_ratios=${l1_ratios}"
 
 # Edit this root path if your metabolomics feature files are stored elsewhere.
-data_root="/cbica/home/wenju/Reproducibile_paper/UKBB_Metabolomics/MLNI/data"
+data_root="/cbica/home/wenju/Reproducibile_paper/UKBB_metabolomics/MLNI/data"
 organ_tsv="${data_root}/${organ}/training/training_4589.tsv,${data_root}/${organ}/PT/patient_pop.tsv,${data_root}/${organ}/test/ind_test_500.tsv"
 
 python "${script_path}" \
