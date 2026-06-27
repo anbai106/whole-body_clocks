@@ -6,7 +6,7 @@ import numpy as np
 ### 7 mri mortality clock
 for organ in ['brain', 'adipose', 'heart', 'kidney', 'liver', 'pancreas', 'spleen']:
     organ_big = organ.capitalize()
-    tsv = os.path.join('/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock', organ + "_mri_mortality_clock", organ + "_mri_mortality_clock_predictions.tsv")
+    tsv = os.path.join('/cbica/home/wenju/Reproducibile_paper/WholeBodyClock', organ + "_mri_mortality_clock", organ + "_mri_mortality_clock_predictions.tsv")
     df_data = pd.read_csv(tsv, sep='\t')
     df_data.rename({organ + '_mri_mortality_clock_acceleration_z': organ_big + '_mri'}, axis=1, inplace=True)
     df_data = df_data[['participant_id', organ_big + '_mri']]
@@ -18,7 +18,7 @@ for organ in ['brain', 'adipose', 'heart', 'kidney', 'liver', 'pancreas', 'splee
 ### 11 proteomics mortality clock
 for organ in ['Reproductive_female', 'Pulmonary', 'Heart', 'Brain', 'Eye', 'Hepatic', 'Renal', 'Reproductive_male', 'Endocrine', 'Immune', 'Skin']:
     organ_small = organ.lower()
-    tsv = os.path.join('/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock', organ + "_proteomics_mortality_clock", organ_small + "_proteomics_mortality_clock_predictions.tsv")
+    tsv = os.path.join('/cbica/home/wenju/Reproducibile_paper/WholeBodyClock', organ + "_proteomics_mortality_clock", organ_small + "_proteomics_mortality_clock_predictions.tsv")
     df_data = pd.read_csv(tsv, sep='\t')
     df_data.rename({organ_small + '_proteomics_mortality_clock_acceleration_z': organ + '_proteomics'}, axis=1, inplace=True)
     df_data = df_data[['participant_id', organ + '_proteomics']]
@@ -27,7 +27,7 @@ for organ in ['Reproductive_female', 'Pulmonary', 'Heart', 'Brain', 'Eye', 'Hepa
 ### 5 metabolomics mortality clock
 for organ in ['Endocrine', 'Digestive', 'Hepatic', 'Immune']:
     organ_small = organ.lower()
-    tsv = os.path.join('/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock', organ + "_metabolomics_mortality_clock", organ_small + "_metabolomics_mortality_clock_predictions.tsv")
+    tsv = os.path.join('/cbica/home/wenju/Reproducibile_paper/WholeBodyClock', organ + "_metabolomics_mortality_clock", organ_small + "_metabolomics_mortality_clock_predictions.tsv")
     df_data = pd.read_csv(tsv, sep='\t')
     df_data.rename({organ_small + '_metabolomics_mortality_clock_acceleration_z': organ + '_metabolomics'}, axis=1, inplace=True)
     df_data = df_data[['participant_id', organ + '_metabolomics']]
