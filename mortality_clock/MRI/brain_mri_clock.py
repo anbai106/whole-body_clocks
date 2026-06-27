@@ -338,18 +338,6 @@ def build_design_matrix(df, brain_feature_cols):
     if "DLICV" in df.columns:
         numeric_covariates.append("DLICV")
 
-    optional_numeric_covariates = [
-        "scanner_lateral_x_brain_position_f25756_2_0",
-        "scanner_transverse_y_brain_position_f25757_2_0",
-        "scanner_longitudinal_z_brain_position_f25758_2_0",
-        "mean_rfmri_head_motion_averaged_across_space_and_time_points_f25741_2_0",
-    ]
-
-    for c in optional_numeric_covariates:
-        if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors="coerce")
-            numeric_covariates.append(c)
-
     categorical_covariates = ["sex"]
 
     optional_categorical_covariates = [
@@ -645,8 +633,7 @@ def get_incremental_model_feature_indices(feature_names):
     Define feature sets for incremental-value analysis.
 
     M0: age + sex
-    M1: all retained non-brain covariates, including age, sex, DLICV,
-        scanner/head-motion variables, and assessment center
+    M1: all retained non-brain covariates, including age, sex, DLICV
     M2: brain MRI features only
     M3: full model = non-brain covariates + brain MRI features
     """
@@ -782,7 +769,7 @@ def run_incremental_value_analysis(
 
     model_specs = {
         "M0_age_sex": "Age + sex",
-        "M1_covariate_baseline": "Age + sex + DLICV + retained scanner/head-motion/assessment-center covariates",
+        "M1_covariate_baseline": "Age + sex + DLICV + assessment-center covariates",
         "M2_brain_mri_only": "Brain MRI MUSE/WMLS features only",
     }
 
