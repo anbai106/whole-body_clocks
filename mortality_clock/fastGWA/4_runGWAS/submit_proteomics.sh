@@ -17,7 +17,7 @@ mkdir -p ${output_dir}
 cd $output_dir
 
 ## A step to derive the bed binary file and also the replicate participants.
-bfile="/cbica/home/wenju/Reproducibile_paper/UKBB_Proteomics/fastGWA/protein_keep_for_BAG_with_related_ind"
+bfile="/cbica/home/wenju/Reproducibile_paper/UKBB_Proteomics/fastGWA/protein_keep_for_BAG_with_related_indi"
 pheno="${input_dir}/${organ}_proteomics_mortality_clock/EPOCH_pheno_normalized_residualized_with_related_indi.phen"
 output_file="${output_dir}/organ_pheno_normalized_residualized"
 if [[ -f ${output_file}.fastGWA ]]; then
