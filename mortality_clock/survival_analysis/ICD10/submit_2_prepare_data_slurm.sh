@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --partition=all
 #SBATCH --job-name=ArrayJob
-#SBATCH --array=0-XXX
+#SBATCH --array=0-3572
 #SBATCH --mem-per-cpu=24G
 #SBATCH --time=0-05:59:00
 #SBATCH --output=/cbica/home/wenju/output/SA_%A_%a.out
