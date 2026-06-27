@@ -59,7 +59,7 @@ make_manifest <- function(base_dir) {
     "Renal", "Reproductive_male", "Endocrine", "Immune", "Skin"
   )
   metabolomics_organs <- c("Endocrine", "Digestive", "Hepatic", "Immune", "Metabolic")
-
+  
   bind_rows(
     tibble(
       modality = "MRI",
@@ -173,7 +173,7 @@ read_delta_from_files <- function(meta, perf) {
   lo <- json_get_num(perf, "delta_cindex_test_M3_vs_M1_ci_lower")
   hi <- json_get_num(perf, "delta_cindex_test_M3_vs_M1_ci_upper")
   p <- json_get_num(perf, "delta_cindex_test_M3_vs_M1_p_two_sided")
-
+  
   if ((!is.finite(delta) || !is.finite(lo) || !is.finite(hi)) && file.exists(meta$delta_file)) {
     delta_tbl <- readr::read_tsv(meta$delta_file, show_col_types = FALSE, progress = FALSE)
     if (nrow(delta_tbl) > 0) {
@@ -185,7 +185,7 @@ read_delta_from_files <- function(meta, perf) {
       }
     }
   }
-
+  
   tibble(
     delta_cindex_test_M3_vs_M1 = delta,
     delta_cindex_test_M3_vs_M1_ci_lower = lo,
@@ -217,7 +217,7 @@ tidy_survfit_mortality <- function(fit) {
 
 read_one_clock <- function(meta_row, skip_missing = TRUE) {
   meta <- as.list(meta_row)
-
+  
   if (!file.exists(meta$clock_dir) || !file.exists(meta$prediction_file) || !file.exists(meta$performance_file)) {
     msg <- paste0(
       "Missing input for ", meta$clock_label, ":\n",
@@ -232,13 +232,13 @@ read_one_clock <- function(meta_row, skip_missing = TRUE) {
       stop(msg)
     }
   }
-
+  
   pred <- readr::read_tsv(meta$prediction_file, show_col_types = FALSE, progress = FALSE)
   perf <- jsonlite::fromJSON(meta$performance_file)
-
+  
   feature_token <- paste0(meta$organ_key, "_", meta$modality_key)
   risk_score_col <- paste0(feature_token, "_mortality_risk_score")
-
+  
   if (!risk_score_col %in% colnames(pred)) {
     fallback_cols <- grep("_mortality_risk_score$", colnames(pred), value = TRUE)
     if (length(fallback_cols) == 1) {
@@ -247,13 +247,13 @@ read_one_clock <- function(meta_row, skip_missing = TRUE) {
       stop("Could not identify mortality risk-score column for ", meta$clock_label)
     }
   }
-
+  
   required_cols <- c("participant_id", "time_years", "event", "split", risk_score_col)
   missing_cols <- setdiff(required_cols, colnames(pred))
   if (length(missing_cols) > 0) {
     stop("Missing required columns for ", meta$clock_label, ": ", paste(missing_cols, collapse = ", "))
   }
-
+  
   pred <- pred %>%
     mutate(
       event = normalize_event_column(event),
@@ -261,7 +261,7 @@ read_one_clock <- function(meta_row, skip_missing = TRUE) {
       risk_score = .data[[risk_score_col]]
     ) %>%
     filter(!is.na(time_years), !is.na(event), !is.na(split), !is.na(risk_score))
-
+  
   cindex_tbl <- pred %>%
     group_by(split) %>%
     summarise(cindex_calc = calc_cindex(cur_data()), .groups = "drop") %>%
@@ -281,13 +281,13 @@ read_one_clock <- function(meta_row, skip_missing = TRUE) {
       folder = meta$folder,
       prefix = meta$prefix
     )
-
+  
   cindex_train <- cindex_tbl %>% filter(split == "train") %>% pull(cindex)
   cindex_validation <- cindex_tbl %>% filter(split == "validation") %>% pull(cindex)
   cindex_test <- cindex_tbl %>% filter(split == "test") %>% pull(cindex)
-
+  
   delta_tbl <- read_delta_from_files(meta, perf)
-
+  
   m3_json_field <- paste0("cindex_test_M3_full_covariates_plus_", meta$organ_key, "_", meta$modality_key)
   m3_cindex <- json_get_num(perf, m3_json_field)
   if (!is.finite(m3_cindex) && file.exists(meta$model_comparison_file)) {
@@ -297,7 +297,7 @@ read_one_clock <- function(meta_row, skip_missing = TRUE) {
       if (nrow(m3_row) > 0) m3_cindex <- as.numeric(m3_row$cindex[[1]])
     }
   }
-
+  
   summary_row <- tibble(
     clock_id = meta$clock_id,
     modality = meta$modality,
@@ -327,13 +327,13 @@ read_one_clock <- function(meta_row, skip_missing = TRUE) {
         TRUE ~ "Not significant"
       )
     )
-
+  
   # Risk quartiles are defined from the training split and then applied to the test set.
   train_risk <- pred %>% filter(split == "train") %>% pull(risk_score)
   risk_breaks <- quantile(train_risk, probs = seq(0, 1, by = 0.25), na.rm = TRUE, type = 8)
   risk_breaks[1] <- -Inf
   risk_breaks[length(risk_breaks)] <- Inf
-
+  
   if (length(unique(risk_breaks)) < length(risk_breaks)) {
     pred <- pred %>%
       group_by(split) %>%
@@ -353,10 +353,10 @@ read_one_clock <- function(meta_row, skip_missing = TRUE) {
         )
       )
   }
-
+  
   test_for_km <- pred %>%
     filter(split == "test", !is.na(risk_quartile))
-
+  
   if (nrow(test_for_km) > 0 && sum(test_for_km$event, na.rm = TRUE) > 0 && dplyr::n_distinct(test_for_km$risk_quartile) >= 2) {
     km_fit <- survival::survfit(survival::Surv(time_years, event) ~ risk_quartile, data = test_for_km)
     km_tbl <- tidy_survfit_mortality(km_fit) %>%
@@ -379,7 +379,7 @@ read_one_clock <- function(meta_row, skip_missing = TRUE) {
       cum_mortality = numeric(), cum_lower = numeric(), cum_upper = numeric()
     )
   }
-
+  
   list(
     summary = summary_row,
     cindex = cindex_tbl,
@@ -519,7 +519,7 @@ p_optimism <- combined_summary_plot_tbl %>%
 # ============================================================
 
 p_delta <- combined_summary_plot_tbl %>%
-  ggplot(aes(x = delta_cindex_test_M3_vs_M1, y = clock_plot, color = delta_significant)) +
+  ggplot(aes(x = delta_cindex_test_M3_vs_M1, y = clock_plot, color = modality)) +
   geom_vline(xintercept = 0, linetype = "dashed", color = "#7B7D7D", linewidth = 0.45) +
   geom_errorbarh(
     aes(xmin = delta_cindex_test_M3_vs_M1_ci_lower, xmax = delta_cindex_test_M3_vs_M1_ci_upper),
@@ -528,14 +528,14 @@ p_delta <- combined_summary_plot_tbl %>%
     na.rm = TRUE
   ) +
   geom_point(aes(size = cindex_test), alpha = 0.95, na.rm = TRUE) +
-  scale_color_manual(values = significance_cols, drop = FALSE) +
+  scale_color_manual(values = modality_cols, drop = FALSE) +
   scale_size_continuous(range = c(1.8, 4.2), limits = range(combined_summary_plot_tbl$cindex_test, na.rm = TRUE)) +
   labs(
     title = "C. Incremental value beyond covariates",
     subtitle = "Test-set ΔC-index = M3 full model - M1 covariate baseline; horizontal bars show bootstrap 95% CI",
     x = "ΔC-index on test set",
     y = NULL,
-    color = "Incremental value",
+    color = "Modality",
     size = "Test C-index"
   ) +
   theme_clock(base_size = 11) +
@@ -594,11 +594,11 @@ if (nrow(combined_km_plot_tbl) > 0) {
       cum_lower = pmax(0, cum_lower),
       cum_upper = pmax(cum_lower, cum_upper)
     )
-
+  
   km_ymax <- max(km_tbl_plot$cum_upper, na.rm = TRUE)
   if (!is.finite(km_ymax) || km_ymax <= 0) km_ymax <- 0.30
   km_ymax <- min(max(0.10, km_ymax * 1.04), 0.40)
-
+  
   p_km <- km_tbl_plot %>%
     ggplot(aes(x = time, y = cum_mortality, color = risk_quartile, fill = risk_quartile)) +
     geom_ribbon(aes(ymin = cum_lower, ymax = cum_upper), alpha = 0.12, color = NA) +

@@ -1,1 +1,0 @@
-RUN GWAS on CUBIC cluster
