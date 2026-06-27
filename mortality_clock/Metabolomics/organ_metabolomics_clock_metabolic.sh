@@ -42,13 +42,13 @@ echo "============================================================"
 # These arguments correspond to the revised Python script that fixes:
 #   ArithmeticError: Numerical error, because weights are too large.
 alpha_min_ratio="0.01"
-covariate_penalty_factor="0.05"
-l1_ratios="0.05,0.1,0.25,0.5"
+covariate_penalty_factor="0.01"
+l1_ratios="0.05,0.1,0.25"
 
 # The broad Metabolic clock uses all metabolites and is more collinear, so use
 # a slightly stronger minimum alpha to avoid unstable Coxnet paths.
 if [[ "${organ}" == "Metabolic" ]]; then
-  alpha_min_ratio="0.05"
+  alpha_min_ratio="0.01"
   l1_ratios="0.05,0.1,0.25"
 fi
 
