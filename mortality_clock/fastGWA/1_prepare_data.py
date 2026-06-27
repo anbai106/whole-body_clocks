@@ -86,25 +86,25 @@ for organ in ['brain', 'adipose', 'heart', 'kidney', 'liver', 'pancreas', 'splee
     prepare_data(df_data, cov_tsv, output_dir, fastgwa_fam)
 
 ### 11 proteomics mortality clock
-# for organ in ['Reproductive_female', 'Pulmonary', 'Heart', 'Brain', 'Eye', 'Hepatic', 'Renal', 'Reproductive_male', 'Endocrine', 'Immune', 'Skin']:
-#     organ_small = organ.lower()
-#     tsv = os.path.join('/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock', organ + "_proteomics_mortality_clock", organ_small + "_proteomics_mortality_clock_predictions.tsv")
-#     df_data = pd.read_csv(tsv, sep='\t')
-#     df_data.rename({organ_small + '_proteomics_mortality_clock_acceleration_z': 'EPOCH'}, axis=1, inplace=True)
-#     cov_tsv = '/Users/hao/cubic-home/Reproducibile_paper/PRS_UKBB/prediction/data/UKBB_fullsample_covariate.csv'
-#     output_dir = os.path.join("/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/mortality_clock/fastGWA/data", organ + "_proteomics_mortality_clock")
-#     create_folder_if_not_exists(output_dir)
-#     fastgwa_fam = "/Users/hao/cubic-home/Dataset/UKBB/UKBB_genetic_preprocess_all/S3_apply_all/chr_all_AllUKBBPeople.fam"
-#     prepare_data(df_data, cov_tsv, output_dir, fastgwa_fam)
+for organ in ['Reproductive_female', 'Pulmonary', 'Heart', 'Brain', 'Eye', 'Hepatic', 'Renal', 'Reproductive_male', 'Endocrine', 'Immune', 'Skin']:
+    organ_small = organ.lower()
+    tsv = os.path.join('/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock', organ + "_proteomics_mortality_clock", organ_small + "_proteomics_mortality_clock_predictions.tsv")
+    df_data = pd.read_csv(tsv, sep='\t')
+    df_data.rename({organ_small + '_proteomics_mortality_clock_acceleration_z': 'EPOCH'}, axis=1, inplace=True)
+    cov_tsv = '/Users/hao/cubic-home/Reproducibile_paper/PRS_UKBB/prediction/data/UKBB_fullsample_covariate.csv'
+    output_dir = os.path.join("/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/mortality_clock/fastGWA/data", organ + "_proteomics_mortality_clock")
+    create_folder_if_not_exists(output_dir)
+    fastgwa_fam = "/Users/hao/cubic-home/Dataset/UKBB/UKBB_genetic_preprocess_all/S3_apply_all/chr_all_AllUKBBPeople.fam"
+    prepare_data(df_data, cov_tsv, output_dir, fastgwa_fam)
 
 ### 5 metabolomics mortality clock
-# for organ in ['Endocrine', 'Digestive', 'Hepatic', 'Immune']:
-#     organ_small = organ.lower()
-#     tsv = os.path.join('/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock', organ + "_metabolomics_mortality_clock", organ_small + "_metabolomics_mortality_clock_predictions.tsv")
-#     df_data = pd.read_csv(tsv, sep='\t')
-#     df_data.rename({organ_small + '_metabolomics_mortality_clock_acceleration_z': 'EPOCH'}, axis=1, inplace=True)
-#     cov_tsv = '/Users/hao/cubic-home/Reproducibile_paper/PRS_UKBB/prediction/data/UKBB_fullsample_covariate.csv'
-#     output_dir = os.path.join("/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/mortality_clock/fastGWA/data", organ + "_metabolomics_mortality_clock")
-#     create_folder_if_not_exists(output_dir)
-#     fastgwa_fam = "/Users/hao/cubic-home/Dataset/UKBB/UKBB_genetic_preprocess_all/S3_apply_all/chr_all_AllUKBBPeople.fam"
-#     prepare_data(df_data, cov_tsv, output_dir, fastgwa_fam)
+for organ in ['Endocrine', 'Digestive', 'Hepatic', 'Immune']:
+    organ_small = organ.lower()
+    tsv = os.path.join('/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock', organ + "_metabolomics_mortality_clock", organ_small + "_metabolomics_mortality_clock_predictions.tsv")
+    df_data = pd.read_csv(tsv, sep='\t')
+    df_data.rename({organ_small + '_metabolomics_mortality_clock_acceleration_z': 'EPOCH'}, axis=1, inplace=True)
+    cov_tsv = '/Users/hao/cubic-home/Reproducibile_paper/PRS_UKBB/prediction/data/UKBB_fullsample_covariate.csv'
+    output_dir = os.path.join("/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/mortality_clock/fastGWA/data", organ + "_metabolomics_mortality_clock")
+    create_folder_if_not_exists(output_dir)
+    fastgwa_fam = "/Users/hao/cubic-home/Dataset/UKBB/UKBB_genetic_preprocess_all/S3_apply_all/chr_all_AllUKBBPeople.fam"
+    prepare_data(df_data, cov_tsv, output_dir, fastgwa_fam)
