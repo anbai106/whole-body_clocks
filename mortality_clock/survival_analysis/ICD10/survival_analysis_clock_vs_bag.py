@@ -163,6 +163,13 @@ def construct_survival_data(args) -> Tuple[pd.DataFrame, str]:
     df_clock = df_clock_all[required_clock_cols].copy()
 
     df_bag_all = pd.read_csv(args.bag_tsv, sep="\t")
+
+    # MomoBAG stores the brain MRI BAG as Brain_PhenoBAG. Create the expected
+    # analysis alias Brain_MRIBAG so the downstream clock/BAG pair list can stay
+    # consistent with the other MRI BAG column names.
+    if "Brain_MRIBAG" not in df_bag_all.columns and "Brain_PhenoBAG" in df_bag_all.columns:
+        df_bag_all = df_bag_all.rename(columns={"Brain_PhenoBAG": "Brain_MRIBAG"})
+
     required_bag_cols = ["participant_id"] + BAG_COLS
     missing_bag = [c for c in required_bag_cols if c not in df_bag_all.columns]
     if missing_bag:
@@ -299,7 +306,10 @@ def empty_result(disease_id: str, pair: Dict[str, str], status: str, error: str 
         "error": error,
     }
     numeric_cols = [
-        "N", "N_case", "N_noncase", "event_rate", "clock_bag_pearson",
+        "N", "N_case", "N_noncase", "event_rate",
+        "followup_years_min", "followup_years_max",
+        "event_followup_years_min", "event_followup_years_max",
+        "clock_bag_pearson",
         "clock_beta", "clock_se", "clock_hr", "clock_ci_lo", "clock_ci_hi", "clock_p",
         "bag_beta", "bag_se", "bag_hr", "bag_ci_lo", "bag_ci_hi", "bag_p",
         "clock_joint_beta", "clock_joint_se", "clock_joint_hr", "clock_joint_p",
@@ -338,11 +348,25 @@ def analyze_pair(data: pd.DataFrame, disease_id: str, pair: Dict[str, str], args
     # Incident disease filtering relative to the measurement time origin.
     df = df[df[time_col] > 0].copy()
 
+    # Follow-up duration from the pair-specific time origin to event or censoring.
+    # For MRI clocks this is imaging-to-event/censoring; for proteomics/metabolomics
+    # clocks this is baseline-to-event/censoring. Event-specific summaries are
+    # reported among incident cases only.
+    followup_years = pd.to_numeric(df[time_col], errors="coerce") / 365.25
+    event_followup_years = followup_years[df["case"] == 1]
+    followup_summary = {
+        "followup_years_min": float(followup_years.min()) if followup_years.notna().any() else np.nan,
+        "followup_years_max": float(followup_years.max()) if followup_years.notna().any() else np.nan,
+        "event_followup_years_min": float(event_followup_years.min()) if event_followup_years.notna().any() else np.nan,
+        "event_followup_years_max": float(event_followup_years.max()) if event_followup_years.notna().any() else np.nan,
+    }
+
     n_case = int(df["case"].sum())
     n_noncase = int((df["case"] == 0).sum())
     if n_case < args.min_case or n_noncase < args.min_noncase:
         out = empty_result(disease_id, pair, "insufficient_events")
         out.update({"N": len(df), "N_case": n_case, "N_noncase": n_noncase})
+        out.update(followup_summary)
         return out
 
     if not standardize_inplace(df, clock, "clock_z"):
@@ -361,6 +385,7 @@ def analyze_pair(data: pd.DataFrame, disease_id: str, pair: Dict[str, str], args
     except Exception as e:
         out = empty_result(disease_id, pair, "cox_fit_failed", str(e))
         out.update({"N": len(df), "N_case": n_case, "N_noncase": n_noncase})
+        out.update(followup_summary)
         return out
 
     clock_stats = extract_hr(cph_clock, "clock_z")
@@ -395,6 +420,7 @@ def analyze_pair(data: pd.DataFrame, disease_id: str, pair: Dict[str, str], args
             "N_case": n_case,
             "N_noncase": n_noncase,
             "event_rate": float(n_case / len(df)) if len(df) > 0 else np.nan,
+            **followup_summary,
             "clock_bag_pearson": float(df[["clock_z", "bag_z"]].corr().iloc[0, 1]),
             "clock_beta": clock_stats["beta"],
             "clock_se": clock_stats["se"],
