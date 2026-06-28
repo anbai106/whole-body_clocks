@@ -187,7 +187,8 @@ def construct_survival_data(args) -> Tuple[pd.DataFrame, str]:
 
     # Disease-specific administrative censor date. If you have a true disease-specific censor date,
     # replace this with that external censor date.
-    global_end_date = data.loc[data["event_date"].notna(), "event_date"].max() + pd.Timedelta(days=2)
+    # global_end_date = data.loc[data["event_date"].notna(), "event_date"].max() + pd.Timedelta(days=2)
+    global_end_date = pd.Timestamp("2022-11-30")
 
     data["time_baseline"] = np.where(
         data["case"] == 1,
