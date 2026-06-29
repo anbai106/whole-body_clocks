@@ -62,6 +62,13 @@ BAG_COLS = [p["bag"] for p in CLOCK_BAG_PAIRS]
 
 BASELINE_DATE_COL = "date_of_attending_assessment_centre_f53_0_0"
 IMAGING_DATE_COL = "date_of_attending_assessment_centre_f53_2_0"
+DEATH_DATE_COL = "death_date_f40000_0_0"
+
+# Raw column names in the University of Melbourne UKBB file from Ye.
+UMEL_BASELINE_DATE_RAW = "53-0.0"
+UMEL_IMAGING_DATE_RAW = "53-2.0"
+UMEL_DEATH_DATE_RAW = "40000-0.0"
+
 AGE_RECRUIT_COL = "age_at_recruitment_f21022_0_0"
 SMOKING_COL = "smoking_status_f20116_0_0"
 BMI_COL = "body_mass_index_bmi_f23104_0_0"
@@ -87,6 +94,27 @@ def parse_args():
         "--date_tsv",
         default="/cbica/home/wenju/Reproducibile_paper/Multiorgan_Subtype/data/PWAS/UKBB_fullsample_death_variables.csv",
         type=str,
+        help=(
+            "Fallback date file. In the current pipeline this is mainly used for "
+            "imaging visit date f53_2_0 because this file has sparse f53_0_0 coverage."
+        ),
+    )
+    parser.add_argument(
+        "--umel_death_xlsx",
+        default="/cbica/home/wenju/Dataset/UKBB_UMelbourne/Death_related_var_from_Ye.xlsx",
+        type=str,
+        help="University of Melbourne UKBB file containing raw field 53-0.0 and 40000-0.0.",
+    )
+    parser.add_argument(
+        "--umel_match_csv",
+        default="/cbica/home/wenju/Dataset/UKBB_UMelbourne/UKB_UMelbourne_vs_Penn_match_key.csv",
+        type=str,
+        help="Mapping key from UMelbourne participant ID to Penn/UPenn participant ID.",
+    )
+    parser.add_argument(
+        "--no_umelbourne_f53",
+        action="store_true",
+        help="Disable UMelbourne field-53 import and use only --date_tsv.",
     )
     parser.add_argument("--min_case", default=20, type=int)
     parser.add_argument("--min_noncase", default=20, type=int)
@@ -106,6 +134,25 @@ def clean_event_dates(series: pd.Series) -> pd.Series:
     x = series.copy()
     x = x.replace([0, 0.0, "0", "0.0", "", "NA", "NaN", "nan", "None", "-1", -1], np.nan)
     return pd.to_datetime(x, errors="coerce")
+
+
+def parse_ukb_date(series: pd.Series) -> pd.Series:
+    """
+    Parse UKBB date fields robustly.
+
+    Handles ISO/date strings, pandas datetimes, and Excel serial dates that can appear
+    after reading .xlsx files. Non-date placeholders are set to missing.
+    """
+    x = series.copy()
+    x = x.replace([0, 0.0, "0", "0.0", "", "NA", "NaN", "nan", "None", "-1", -1], np.nan)
+    parsed = pd.to_datetime(x, errors="coerce")
+
+    numeric = pd.to_numeric(x, errors="coerce")
+    excel_mask = numeric.between(20000, 60000)
+    if excel_mask.any():
+        excel_dates = pd.to_datetime(numeric, unit="D", origin="1899-12-30", errors="coerce")
+        parsed = parsed.where(~excel_mask, excel_dates)
+    return parsed
 
 
 def read_covariates(path: str) -> pd.DataFrame:
@@ -131,6 +178,7 @@ def read_covariates(path: str) -> pd.DataFrame:
     if sex_col is not None:
         rename[sex_col] = "Sex"
     cov = cov.rename(columns=rename)
+    cov = normalize_participant_id(cov, "participant_id")
 
     for c in cov.columns:
         if c != "participant_id":
@@ -138,18 +186,166 @@ def read_covariates(path: str) -> pd.DataFrame:
     return cov
 
 
-def read_assessment_dates(path: str) -> pd.DataFrame:
+def normalize_participant_id(df: pd.DataFrame, col: str = "participant_id") -> pd.DataFrame:
+    """Normalize UKBB/Penn IDs before merging."""
+    if col not in df.columns:
+        raise ValueError(f"Missing ID column: {col}")
+    df = df.copy()
+    df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
+    df = df[df[col].notna()].copy()
+    return df
+
+
+def _read_fallback_assessment_dates(path: str) -> pd.DataFrame:
+    """
+    Read the existing local/Penn date file as a fallback source.
+
+    In the current project this file appears to have f53_0_0 for only the imaging subset,
+    so it should not be used as the primary baseline date source for omics. It is still
+    useful for f53_2_0 imaging visit dates.
+    """
     d = pd.read_csv(path)
     if "eid" in d.columns:
         d = d.rename(columns={"eid": "participant_id"})
-    keep = ["participant_id", BASELINE_DATE_COL, IMAGING_DATE_COL]
-    missing = [c for c in keep if c not in d.columns]
-    if missing:
-        raise ValueError(f"Missing date columns in {path}: {missing}")
+    d = normalize_participant_id(d, "participant_id")
+
+    keep = ["participant_id"]
+    for c in [BASELINE_DATE_COL, IMAGING_DATE_COL, DEATH_DATE_COL]:
+        if c in d.columns:
+            keep.append(c)
+
     d = d[keep].copy()
-    d[BASELINE_DATE_COL] = pd.to_datetime(d[BASELINE_DATE_COL], errors="coerce")
-    d[IMAGING_DATE_COL] = pd.to_datetime(d[IMAGING_DATE_COL], errors="coerce")
+    for c in [BASELINE_DATE_COL, IMAGING_DATE_COL, DEATH_DATE_COL]:
+        if c in d.columns:
+            d[c] = parse_ukb_date(d[c])
     return d
+
+
+def _read_umelbourne_assessment_dates(death_xlsx: str, match_csv: str) -> pd.DataFrame:
+    """
+    Read UMelbourne UKBB field-53 dates and map them to Penn/UPenn participant IDs.
+
+    Required input logic:
+      Death_related_var_from_Ye.xlsx: eid, 53-0.0, 40000-0.0, optionally 53-2.0
+      UKB_UMelbourne_vs_Penn_match_key.csv: id, id_upenn
+    """
+    if not os.path.exists(death_xlsx):
+        raise FileNotFoundError(f"UMelbourne death/date Excel not found: {death_xlsx}")
+    if not os.path.exists(match_csv):
+        raise FileNotFoundError(f"UMelbourne-to-Penn match key not found: {match_csv}")
+
+    try:
+        df_ukb_death = pd.read_excel(death_xlsx, engine="openpyxl")
+    except ImportError as e:
+        raise ImportError(
+            "pandas.read_excel requires openpyxl for the UMelbourne .xlsx file. "
+            "Install openpyxl in the survival environment or save the file as CSV."
+        ) from e
+
+    df_id_match = pd.read_csv(match_csv)
+
+    required_death_cols = ["eid", UMEL_BASELINE_DATE_RAW]
+    missing_death = [c for c in required_death_cols if c not in df_ukb_death.columns]
+    if missing_death:
+        raise ValueError(f"Missing columns in UMelbourne date Excel: {missing_death}")
+
+    required_match_cols = ["id", "id_upenn"]
+    missing_match = [c for c in required_match_cols if c not in df_id_match.columns]
+    if missing_match:
+        raise ValueError(f"Missing columns in UMelbourne/Penn match key: {missing_match}")
+
+    df_ukb_death = df_ukb_death.rename(columns={"eid": "participant_id_umel"})
+    df_id_match = df_id_match.rename(columns={"id": "participant_id_umel", "id_upenn": "participant_id"})
+
+    df_ukb_death = normalize_participant_id(df_ukb_death, "participant_id_umel")
+    df_id_match = normalize_participant_id(df_id_match, "participant_id_umel")
+    df_id_match = normalize_participant_id(df_id_match, "participant_id")
+
+    raw_cols = ["participant_id_umel", UMEL_BASELINE_DATE_RAW]
+    if UMEL_IMAGING_DATE_RAW in df_ukb_death.columns:
+        raw_cols.append(UMEL_IMAGING_DATE_RAW)
+    if UMEL_DEATH_DATE_RAW in df_ukb_death.columns:
+        raw_cols.append(UMEL_DEATH_DATE_RAW)
+
+    merged = df_id_match[["participant_id_umel", "participant_id"]].merge(
+        df_ukb_death[raw_cols], on="participant_id_umel", how="inner"
+    )
+
+    rename = {
+        UMEL_BASELINE_DATE_RAW: BASELINE_DATE_COL,
+        UMEL_IMAGING_DATE_RAW: IMAGING_DATE_COL,
+        UMEL_DEATH_DATE_RAW: DEATH_DATE_COL,
+    }
+    merged = merged.rename(columns={k: v for k, v in rename.items() if k in merged.columns})
+
+    keep = ["participant_id", BASELINE_DATE_COL]
+    for c in [IMAGING_DATE_COL, DEATH_DATE_COL]:
+        if c in merged.columns:
+            keep.append(c)
+    merged = merged[keep].copy()
+
+    for c in [BASELINE_DATE_COL, IMAGING_DATE_COL, DEATH_DATE_COL]:
+        if c in merged.columns:
+            merged[c] = parse_ukb_date(merged[c])
+
+    # If duplicated mapping rows exist, keep the first non-null date values per Penn ID.
+    merged = (
+        merged.sort_values("participant_id")
+        .groupby("participant_id", as_index=False)
+        .first()
+    )
+    return merged
+
+
+def coalesce_series(primary: pd.Series, fallback: pd.Series) -> pd.Series:
+    """Return primary values, filled by fallback where primary is missing."""
+    out = primary.copy()
+    out = out.where(out.notna(), fallback)
+    return out
+
+
+def read_assessment_dates(args) -> pd.DataFrame:
+    """
+    Read assessment dates for survival time origins.
+
+    Baseline f53_0_0 is taken primarily from the UMelbourne file because the existing
+    Penn date file has baseline f53_0_0 only for approximately the imaging subset.
+    Imaging f53_2_0 is taken from UMelbourne if available, otherwise from --date_tsv.
+    """
+    fallback = _read_fallback_assessment_dates(args.date_tsv)
+
+    if args.no_umelbourne_f53:
+        dates = fallback.copy()
+    else:
+        umel = _read_umelbourne_assessment_dates(args.umel_death_xlsx, args.umel_match_csv)
+
+        dates = umel.merge(fallback, on="participant_id", how="outer", suffixes=("_umel", "_fallback"))
+
+        for c in [BASELINE_DATE_COL, IMAGING_DATE_COL, DEATH_DATE_COL]:
+            umel_c = f"{c}_umel"
+            fallback_c = f"{c}_fallback"
+            if umel_c in dates.columns and fallback_c in dates.columns:
+                dates[c] = coalesce_series(dates[umel_c], dates[fallback_c])
+            elif umel_c in dates.columns:
+                dates[c] = dates[umel_c]
+            elif fallback_c in dates.columns:
+                dates[c] = dates[fallback_c]
+            else:
+                dates[c] = pd.NaT
+
+        dates = dates[["participant_id", BASELINE_DATE_COL, IMAGING_DATE_COL, DEATH_DATE_COL]].copy()
+
+    for c in [BASELINE_DATE_COL, IMAGING_DATE_COL, DEATH_DATE_COL]:
+        if c not in dates.columns:
+            dates[c] = pd.NaT
+        dates[c] = parse_ukb_date(dates[c])
+
+    print("Assessment-date coverage after coalescing sources:")
+    print(f"  {BASELINE_DATE_COL}: {int(dates[BASELINE_DATE_COL].notna().sum()):,}")
+    print(f"  {IMAGING_DATE_COL}: {int(dates[IMAGING_DATE_COL].notna().sum()):,}")
+    print(f"  {DEATH_DATE_COL}: {int(dates[DEATH_DATE_COL].notna().sum()):,}")
+
+    return dates
 
 
 def construct_survival_data(args) -> Tuple[pd.DataFrame, str]:
@@ -161,6 +357,7 @@ def construct_survival_data(args) -> Tuple[pd.DataFrame, str]:
     if missing_clock:
         raise ValueError(f"Missing columns in ICD clock TSV {args.icd_tsv}: {missing_clock}")
     df_clock = df_clock_all[required_clock_cols].copy()
+    df_clock = normalize_participant_id(df_clock, "participant_id")
 
     df_bag_all = pd.read_csv(args.bag_tsv, sep="\t")
 
@@ -175,9 +372,10 @@ def construct_survival_data(args) -> Tuple[pd.DataFrame, str]:
     if missing_bag:
         raise ValueError(f"Missing columns in BAG TSV {args.bag_tsv}: {missing_bag}")
     df_bag = df_bag_all[required_bag_cols].copy()
+    df_bag = normalize_participant_id(df_bag, "participant_id")
 
     cov = read_covariates(args.cov_tsv)
-    dates = read_assessment_dates(args.date_tsv)
+    dates = read_assessment_dates(args)
 
     data = df_clock.merge(df_bag, on="participant_id", how="left")
     data = data.merge(cov, on="participant_id", how="left")
@@ -192,24 +390,36 @@ def construct_survival_data(args) -> Tuple[pd.DataFrame, str]:
     if data.loc[data["case"] == 1, "event_date"].notna().sum() == 0:
         raise ValueError("No usable event dates among cases after date cleaning.")
 
-    # Disease-specific administrative censor date. If you have a true disease-specific censor date,
-    # replace this with that external censor date.
-    # global_end_date = data.loc[data["event_date"].notna(), "event_date"].max() + pd.Timedelta(days=2)
+    # Disease-specific administrative censor date. If you have a true disease-specific
+    # censor date, replace this with that external censor date.
+    # For non-cases, we additionally censor at death when a death date is available,
+    # because a participant cannot develop a newly recorded incident diagnosis after death.
     global_end_date = pd.Timestamp("2022-11-30")
+    data["admin_censor_date"] = global_end_date
+    if DEATH_DATE_COL in data.columns:
+        data[DEATH_DATE_COL] = parse_ukb_date(data[DEATH_DATE_COL])
+        data["censor_date"] = data[DEATH_DATE_COL].where(
+            data[DEATH_DATE_COL].notna() & (data[DEATH_DATE_COL] < global_end_date),
+            data["admin_censor_date"],
+        )
+    else:
+        data["censor_date"] = data["admin_censor_date"]
 
     data["time_baseline"] = np.where(
         data["case"] == 1,
         (data["event_date"] - data[BASELINE_DATE_COL]).dt.days,
-        (global_end_date - data[BASELINE_DATE_COL]).dt.days,
+        (data["censor_date"] - data[BASELINE_DATE_COL]).dt.days,
     )
 
     data["time_imaging"] = np.where(
         data["case"] == 1,
         (data["event_date"] - data[IMAGING_DATE_COL]).dt.days,
-        (global_end_date - data[IMAGING_DATE_COL]).dt.days,
+        (data["censor_date"] - data[IMAGING_DATE_COL]).dt.days,
     )
 
     # Use age at the actual time origin. For MRI, the time origin is imaging visit.
+    # We compute imaging age from recruitment/baseline age plus elapsed years between
+    # f53_0_0 and f53_2_0. Baseline omics use Age_baseline directly.
     data["Age_imaging"] = data["Age_baseline"] + (
         (data[IMAGING_DATE_COL] - data[BASELINE_DATE_COL]).dt.days / 365.25
     )
