@@ -21,9 +21,9 @@ keep="${input_dir}/${organ}_metabolomics_mortality_clock/EPOCH_keep_for_fastgwa.
 pheno="${input_dir}/${organ}_metabolomics_mortality_clock/EPOCH_pheno_normalized_residualized_with_related_indi.phen"
 out_name=${organ}
 grm=/cbica/home/wenju/Reproducibile_paper/UKBB_metabolomics/h2/GRM_GCTA/gcta_h2_grm ## need rerun GRM for h2
-if [[ -f ${output_dir}/${organ}_metabolomics_mortality_clock/${organ}.hsq ]]; then
+if [[ -f ${output_dir}/${organ}_metabolomics_mortality_clock/${organ}.HEreg ]]; then
     echo "GCTA has been run..."
     :
 else
-    bash /cbica/home/wenju/Project/whole-body_clocks/mortality_clock/GCTA/run_genotype.sh $output_dir 1 $out_name $pheno $keep ${grm}
+    bash /cbica/home/wenju/Project/whole-body_clocks/mortality_clock/GCTA/run_genotype_HEreg.sh $output_dir 1 $out_name $pheno $keep ${grm}
 fi
