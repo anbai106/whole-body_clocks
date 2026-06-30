@@ -2,7 +2,7 @@
 #SBATCH --partition=all
 #SBATCH --job-name=ArrayJob
 #SBATCH --array=0-10
-#SBATCH --mem-per-cpu=48G
+#SBATCH --mem-per-cpu=96G
 #SBATCH --time=0-10:59:00
 #SBATCH --output=/cbica/home/wenju/output/GCTA_%A_%a.out
 #SBATCH --error=/cbica/home/wenju/output/GCTA_%A_%a.err
