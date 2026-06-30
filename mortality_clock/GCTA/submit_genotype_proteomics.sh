@@ -20,7 +20,7 @@ cd $output_dir
 keep="${input_dir}/${organ}_proteomics_mortality_clock/EPOCH_keep_for_fastgwa.txt"
 pheno="${input_dir}/${organ}_proteomics_mortality_clock/EPOCH_pheno_normalized_residualized_with_related_indi.phen"
 out_name=${organ}
-grm=/cbica/home/wenju/Reproducibile_paper/UKBB_Proteomics/fastGWA/GRM_GCTA/fastGWA_grm_sparse_0.05
+grm=/cbica/home/wenju/Reproducibile_paper/UKBB_Proteomics/h2/GRM_GCTA/gcta_h2_grm ## need rerun GRM for h2
 if [[ -f ${output_dir}/${organ}_proteomics_mortality_clock/${organ}.hsq ]]; then
     echo "GCTA has been run..."
     :
