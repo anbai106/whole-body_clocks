@@ -37,7 +37,7 @@ suppressPackageStartupMessages({
 # 1. Paths
 # =========================
 
-stat_file <- "/Users/hao/Downloads/clock_vs_BAG_powered_ok_Ncase_ge_50.tsv"
+stat_file <- "/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/Result/clock_vs_BAG_survival_summary/clock_vs_BAG_powered_ok_Ncase_ge_50.tsv"
 
 # Optional disease annotation file.
 # If available, create a TSV with columns:
