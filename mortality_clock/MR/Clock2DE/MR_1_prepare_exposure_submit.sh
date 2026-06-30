@@ -1,0 +1,1 @@
+fastGWA does not need to convert to the 2SampleMR format because the A1_freq is in the output file.
