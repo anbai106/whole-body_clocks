@@ -4,8 +4,8 @@
 #SBATCH --array=0-21
 #SBATCH --mem-per-cpu=12G
 #SBATCH --time=0-04:59:00
-#SBATCH --output=/cbica/home/wenju/output/MLNI_%A_%a.out
-#SBATCH --error=/cbica/home/wenju/output/MLNI_%A_%a.err
+#SBATCH --output=/cbica/home/wenju/output/Clock2DE_%A_%a.out
+#SBATCH --error=/cbica/home/wenju/output/Clock2DE_%A_%a.err
 
 numbers=(adipose_mri_mortality_clock Brain_proteomics_mortality_clock Endocrine_metabolomics_mortality_clock Eye_proteomics_mortality_clock Heart_proteomics_mortality_clock Hepatic_proteomics_mortality_clock Immune_proteomics_mortality_clock liver_mri_mortality_clock Pulmonary_proteomics_mortality_clock Reproductive_female_proteomics_mortality_clock Skin_proteomics_mortality_clock brain_mri_mortality_clock Digestive_metabolomics_mortality_clock Endocrine_proteomics_mortality_clock heart_mri_mortality_clock Hepatic_metabolomics_mortality_clock Immune_metabolomics_mortality_clock kidney_mri_mortality_clock pancreas_mri_mortality_clock Renal_proteomics_mortality_clock Reproductive_male_proteomics_mortality_clock spleen_mri_mortality_clock)
 organ=${numbers[$SLURM_ARRAY_TASK_ID]}
