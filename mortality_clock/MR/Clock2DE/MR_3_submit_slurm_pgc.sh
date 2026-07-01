@@ -13,12 +13,15 @@ organ_first="${organ%%_*}"
 module load R/4.3
 
 output_dir=/cbica/home/wenju/Reproducibile_paper/WholeBodyClock/mortality_clock/MR/Clock2DE/PGC
-output_dir_mr=${output_dir}/${organ}
+output_dir_mr=${output_dir}/${organ}/MR
+output_dir_har=${output_dir}/${organ}/harmonization
+mkdir -p $output_dir_mr
+mkdir -p $output_dir_har
 
 ### pgc
 for pgc in AD ADHD BIP SCZ
 do
-  harmonized_file=$output_dir_mr/harmonized_data_${organ}_2_${pgc}.tsv
+  harmonized_file=output_dir_har/harmonized_data_${organ}_2_${pgc}.tsv
   if [ -f "${harmonized_file}" ]; then
     output_file=${output_dir_mr}/MR_${organ_first}_2_${pgc}_OR.tsv
     if [ ! -f "${output_file}" ]; then

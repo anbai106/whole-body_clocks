@@ -55,7 +55,7 @@ for exposure_gwas_tsv in "${fastgwa_files[@]}"; do
   clock="$(basename "$(dirname "${exposure_gwas_tsv}")")"
 
   exposure_fuma_tsv="${fuma_base}/${clock}/IndSigSNPs.txt"
-  output_dir_mr="${mr_output_base}/${clock}"
+  output_dir_mr="${mr_output_base}/${clock}/harmonization"
   mkdir -p "${output_dir_mr}"
 
   # This outcome file is expected to have been created by the FinnGen preprocessing/2SampleMR step.

@@ -46,7 +46,7 @@ exposure_gwas_tsv="${fastgwa_files[$SLURM_ARRAY_TASK_ID]}"
 clock=$(basename "$(dirname "${exposure_gwas_tsv}")")
 
 exposure_fuma_tsv="${fuma_base}/${clock}/IndSigSNPs.txt"
-output_dir_mr="${output_dir}/${clock}"
+output_dir_mr="${output_dir}/${clock}/harmonization"
 
 mkdir -p "${output_dir_mr}"
 
