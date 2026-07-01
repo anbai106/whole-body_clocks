@@ -26,6 +26,7 @@ if [ -f ${plink_clumped_lead_snp_tsv} ] && [ ${num_rows} -gt 7 ]; then
   for organ in brain adipose heart kidney liver pancreas spleen
   do
     output_dir_mr=${output_dir}/${organ}_mri_mortality_clock/harmonization
+    mkdir -p $output_dir_mr
     output_2sampleMR_tsv=/cbica/home/wenju/Reproducibile_paper/WholeBodyClock/mortality_clock/fastGWA/output/${organ}_mri_mortality_clock/organ_pheno_normalized_residualized.fastGWA
     if_done_file=${output_dir_mr}/DONE_${pgc}_2_${organ}.tsv
     if [[ ! -f ${if_done_file} ]]; then
@@ -37,6 +38,7 @@ if [ -f ${plink_clumped_lead_snp_tsv} ] && [ ${num_rows} -gt 7 ]; then
   for organ in Reproductive_female Pulmonary Heart Brain Eye Hepatic Renal Reproductive_male Endocrine Immune Skin
   do
     output_dir_mr=${output_dir}/${organ}_proteomics_mortality_clock/harmonization
+    mkdir -p $output_dir_mr
     output_2sampleMR_tsv=/cbica/home/wenju/Reproducibile_paper/WholeBodyClock/mortality_clock/fastGWA/output/${organ}_proteomics_mortality_clock/organ_pheno_normalized_residualized.fastGWA
     if_done_file=${output_dir_mr}/DONE_${pgc}_2_${organ}.tsv
     if [[ ! -f ${if_done_file} ]]; then
@@ -48,6 +50,7 @@ if [ -f ${plink_clumped_lead_snp_tsv} ] && [ ${num_rows} -gt 7 ]; then
   for organ in Endocrine Digestive Hepatic Immune
   do
     output_dir_mr=${output_dir}/${organ}_metabolomics_mortality_clock/harmonization
+    mkdir -p $output_dir_mr
     output_2sampleMR_tsv=/cbica/home/wenju/Reproducibile_paper/WholeBodyClock/mortality_clock/fastGWA/output/${organ}_metabolomics_mortality_clock/organ_pheno_normalized_residualized.fastGWA
     if_done_file=${output_dir_mr}/DONE_${pgc}_2_${organ}.tsv
     if [[ ! -f ${if_done_file} ]]; then
