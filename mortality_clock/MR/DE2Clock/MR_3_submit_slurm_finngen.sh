@@ -12,9 +12,9 @@
 
 module load R/4.3
 
-output_dir=/cbica/home/wenju/Dataset/FinnGen/2SampleMR/FINNGEN2MRIBAG
+output_dir=/cbica/projects/MULTI/processed/FinnGen/2SampleMR/FINNGEN2MRIBAG
 mkdir -p $output_dir
-de_array=( $( awk '{print $1}' /cbica/home/wenju/Dataset/FinnGen/GWAS_summary_stats/summary_stats_R9_manifest_5000_cases.tsv | grep -v "phenocode" | xargs) )
+de_array=( $( awk '{print $1}' /cbica/projects/MULTI/processed/FinnGen/GWAS_summary_stats/summary_stats_R9_manifest_5000_cases.tsv | grep -v "phenocode" | xargs) )
 de=${de_array[$SLURM_ARRAY_TASK_ID]}
 for organ in brain adipose heart kidney liver pancreas spleen
 do

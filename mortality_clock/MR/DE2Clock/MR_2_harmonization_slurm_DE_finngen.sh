@@ -13,13 +13,13 @@
 module load R/4.3
 
 #### FinnGen
-output_dir=/cbica/home/wenju/Dataset/FinnGen/2SampleMR/FINNGEN2MRIBAG
+output_dir=/cbica/projects/MULTI/processed/FinnGen/2SampleMR/FINNGEN2MRIBAG
 mkdir -p $output_dir
-de_array=( $( awk '{print $1}' /cbica/home/wenju/Dataset/FinnGen/GWAS_summary_stats/summary_stats_R9_manifest_5000_cases.tsv | grep -v "phenocode" | xargs) )
+de_array=( $( awk '{print $1}' /cbica/projects/MULTI/processed/FinnGen/GWAS_summary_stats/summary_stats_R9_manifest_5000_cases.tsv | grep -v "phenocode" | xargs) )
 de=${de_array[$SLURM_ARRAY_TASK_ID]}
 mkdir -p $output_dir
-exposure_gwas_tsv=/cbica/home/wenju/Dataset/FinnGen/2SampleMR/finngen_R9_${de}_2SampleMR.tsv
-plinkn_clumped_lead_snp_tsv=/cbica/home/wenju/Dataset/FinnGen/2SampleMR/plink_clumped/finngen_R9_${de}.clumped
+exposure_gwas_tsv=/cbica/projects/MULTI/processed/FinnGen/2SampleMR/finngen_R9_${de}_2SampleMR.tsv
+plinkn_clumped_lead_snp_tsv=/cbica/projects/MULTI/processed/FinnGen/2SampleMR/plink_clumped/finngen_R9_${de}.clumped
 num_rows=$(wc -l < ${plinkn_clumped_lead_snp_tsv})
 if [ -f ${plinkn_clumped_lead_snp_tsv} ] && [ ${num_rows} -gt 7 ]; then
   for organ in brain adipose heart kidney liver pancreas spleen

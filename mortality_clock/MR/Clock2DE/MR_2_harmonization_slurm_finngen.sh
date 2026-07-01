@@ -3,7 +3,7 @@
 #SBATCH --job-name=Clock2DE
 #SBATCH --array=0-520
 #SBATCH --mem-per-cpu=12G
-#SBATCH --time=1-00:59:00
+#SBATCH --time=0-09:59:00
 #SBATCH --output=/cbica/home/wenju/output/MR_2_%A_%a.out
 #SBATCH --error=/cbica/home/wenju/output/MR_2_%A_%a.err
 
@@ -59,7 +59,7 @@ for exposure_gwas_tsv in "${fastgwa_files[@]}"; do
   mkdir -p "${output_dir_mr}"
 
   # This outcome file is expected to have been created by the FinnGen preprocessing/2SampleMR step.
-  output_2sampleMR_tsv="${output_dir_mr}/finngen_R9_${finngen}_2SampleMR.tsv"
+  output_2sampleMR_tsv="/cbica/projects/MULTI/processed/FinnGen/2SampleMR/finngen_R9_${finngen}_2SampleMR.tsv"
 
   harmonized_file="${output_dir_mr}/harmonized_data_${clock}_2_${finngen}.tsv"
   done_file="${output_dir_mr}/DONE_${clock}_2_${finngen}.tsv"

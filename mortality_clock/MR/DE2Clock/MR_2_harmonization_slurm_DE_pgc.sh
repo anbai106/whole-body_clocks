@@ -12,13 +12,13 @@
 module load R/4.3
 
 #### PGC
-output_dir=/cbica/home/wenju/Dataset/PGC/GWAS_summary_stats/Result/2SampleMR/PGC2MRIBAG
+output_dir=/cbica/projects/MULTI/processed/PGC/GWAS_summary_stats/Result/2SampleMR/PGC2MRIBAG
 mkdir -p $output_dir
-de_array=( $( awk '{print $2}' /cbica/home/wenju/Dataset/PGC/PGC_MUTATE_MR.tsv | grep -v "Phenotype" | xargs) )
+de_array=( $( awk '{print $2}' /cbica/projects/MULTI/processed/PGC/PGC_MUTATE_MR.tsv | grep -v "Phenotype" | xargs) )
 de=${de_array[$SLURM_ARRAY_TASK_ID]}
 mkdir -p $output_dir
-exposure_gwas_tsv=/cbica/home/wenju/Dataset/PGC/GWAS_summary_stats/${de}/2sampleMR.tsv
-plinkn_clumped_lead_snp_tsv=/cbica/home/wenju/Dataset/PGC/GWAS_summary_stats/Result/2SampleMR/plink_clumped/${de}.clumped
+exposure_gwas_tsv=/cbica/projects/MULTI/processed/PGC/GWAS_summary_stats/${de}/2sampleMR.tsv
+plinkn_clumped_lead_snp_tsv=/cbica/projects/MULTI/processed/PGC/GWAS_summary_stats/Result/2SampleMR/plink_clumped/${de}.clumped
 num_rows=$(wc -l < ${plinkn_clumped_lead_snp_tsv})
 if [ -f ${plinkn_clumped_lead_snp_tsv} ] && [ ${num_rows} -gt 7 ]; then
   for organ in brain adipose heart kidney liver pancreas spleen

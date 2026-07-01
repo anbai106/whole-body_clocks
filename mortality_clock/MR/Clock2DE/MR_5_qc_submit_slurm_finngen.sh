@@ -1,15 +1,15 @@
 #!/bin/bash
 #SBATCH --partition=all
-#SBATCH --job-name=BAG2DE
+#SBATCH --job-name=Clock2DE
 #SBATCH --array=0-520
 #SBATCH --mem-per-cpu=12G
 #SBATCH --time=1-00:59:00
-#SBATCH --output=/cbica/home/wenju/output/BAG2DE%A_%a.out
-#SBATCH --error=/cbica/home/wenju/output/BAG2DE%A_%a.err
+#SBATCH --output=/cbica/home/wenju/output/Clock2DE%A_%a.out
+#SBATCH --error=/cbica/home/wenju/output/Clock2DE%A_%a.err
 
 ############################## END OF DEFAULT EMBEDDED SGE COMMANDS #######################
-output_dir=/cbica/home/wenju/Reproducibile_paper/AbdoImaging/MR/BAG2DE
-de_array=( $( awk '{print $1}' /cbica/home/wenju/Dataset/FinnGen/GWAS_summary_stats/summary_stats_R9_manifest_5000_cases.tsv | grep -v "phenocode" | xargs) )
+output_dir=/cbica/home/wenju/Reproducibile_paper/AbdoImaging/MR/Clock2DE
+de_array=( $( awk '{print $1}' /cbica/projects/MULTI/processed/FinnGen/GWAS_summary_stats/summary_stats_R9_manifest_5000_cases.tsv | grep -v "phenocode" | xargs) )
 finngen=${de_array[$SLURM_ARRAY_TASK_ID]}
 
 module load R/4.3
@@ -30,7 +30,7 @@ do
 
     if [ -n "$significant_pval" ]; then
       echo "Run 2SampleMR QC from ${organ} to ${finngen}..."
-      Rscript /cbica/home/wenju/Project/AbdoImaging/MR/BAG2DE/MR_5_qc.R ${organ} ${finngen} ${output_dir}
+      Rscript /cbica/home/wenju/Project/AbdoImaging/MR/Clock2DE/MR_5_qc.R ${organ} ${finngen} ${output_dir}
     else
       echo "Not significant for ${organ}..."
     fi

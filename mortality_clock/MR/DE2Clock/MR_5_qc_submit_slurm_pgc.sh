@@ -11,9 +11,9 @@
 
 module load R/4.3
 
-output_dir=/cbica/home/wenju/Dataset/PGC/GWAS_summary_stats/Result/2SampleMR/PGC2MRIBAG
+output_dir=/cbica/projects/MULTI/processed/PGC/GWAS_summary_stats/Result/2SampleMR/PGC2MRIBAG
 mkdir -p $output_dir
-de_array=( $( awk '{print $2}' /cbica/home/wenju/Dataset/PGC/PGC_MUTATE_MR.tsv | grep -v "Phenotype" | xargs) )
+de_array=( $( awk '{print $2}' /cbica/projects/MULTI/processed/PGC/PGC_MUTATE_MR.tsv | grep -v "Phenotype" | xargs) )
 de=${de_array[$SLURM_ARRAY_TASK_ID]}
 for organ in brain adipose heart kidney liver pancreas spleen
 do

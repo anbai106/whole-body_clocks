@@ -1,14 +1,14 @@
 #!/bin/bash
 #SBATCH --partition=all
-#SBATCH --job-name=BAG2DE
+#SBATCH --job-name=Clock2DE
 #SBATCH --array=0-6
 #SBATCH --mem-per-cpu=12G
 #SBATCH --time=1-00:59:00
-#SBATCH --output=/cbica/home/wenju/output/BAG2DE%A_%a.out
-#SBATCH --error=/cbica/home/wenju/output/BAG2DE%A_%a.err
+#SBATCH --output=/cbica/home/wenju/output/Clock2DE%A_%a.out
+#SBATCH --error=/cbica/home/wenju/output/Clock2DE%A_%a.err
 
 ############################## END OF DEFAULT EMBEDDED SGE COMMANDS #######################
-output_dir=/cbica/home/wenju/Reproducibile_paper/AbdoImaging/MR/BAG2DE
+output_dir=/cbica/home/wenju/Reproducibile_paper/AbdoImaging/MR/Clock2DE
 numbers=(brain adipose heart kidney liver pancreas spleen)
 organ=${numbers[$SLURM_ARRAY_TASK_ID]}
 
@@ -31,7 +31,7 @@ do
 
     if [ -n "$significant_pval" ]; then
       echo "Run 2SampleMR QC from ${organ} to ${pgc}..."
-      Rscript /cbica/home/wenju/Project/AbdoImaging/MR/BAG2DE/MR_5_qc.R ${organ} ${pgc} ${output_dir}
+      Rscript /cbica/home/wenju/Project/AbdoImaging/MR/Clock2DE/MR_5_qc.R ${organ} ${pgc} ${output_dir}
     else
       echo "Not significant for ${organ}..."
     fi

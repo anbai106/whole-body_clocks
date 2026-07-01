@@ -2,11 +2,11 @@ import pandas as pd
 import os
 
 output_dir_results = "/cbica/home/wenju/Reproducibile_paper/AbdoImaging/Result"
-output_dir_finngen = '/cbica/home/wenju/Dataset/FinnGen/2SampleMR/FINNGEN2MRIBAG'
-output_dir_pgc = '/cbica/home/wenju/Dataset/PGC/GWAS_summary_stats/Result/2SampleMR/PGC2MRIBAG'
+output_dir_finngen = '/cbica/projects/MULTI/processed/FinnGen/2SampleMR/FINNGEN2MRIBAG'
+output_dir_pgc = '/cbica/projects/MULTI/processed/PGC/GWAS_summary_stats/Result/2SampleMR/PGC2MRIBAG'
 list_organ = ['brain', "adipose", "heart", "kidney", "liver", "pancreas", "spleen"]
 n = 0
-finngen_pheno = pd.read_csv('/cbica/home/wenju/Dataset/FinnGen/GWAS_summary_stats/summary_stats_R9_manifest_5000_cases.tsv', sep='\t')['phenocode'].to_list()
+finngen_pheno = pd.read_csv('/cbica/projects/MULTI/processed/FinnGen/GWAS_summary_stats/summary_stats_R9_manifest_5000_cases.tsv', sep='\t')['phenocode'].to_list()
 
 for organ in list_organ:
     ## FinnGen
