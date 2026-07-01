@@ -17,7 +17,7 @@ finngen=${de_array[$SLURM_ARRAY_TASK_ID]}
 for organ in brain adipose heart kidney liver pancreas spleen
 do
   output_dir_mr=${output_dir}/${organ}_mri_mortality_clock
-  harmonized_file=$output_dir_mr/harmonization_log_${organ}_mri_mortality_clock_2_${finngen}.tsv
+  harmonized_file=$output_dir_mr/harmonized_data_${organ}_mri_mortality_clock_2_${finngen}.tsv
   if [ -f "${harmonized_file}" ]; then
     output_file=${output_dir_mr}/MR_${organ}_2_${finngen}_OR.tsv
     if [ ! -f "${output_file}" ]; then
@@ -31,7 +31,7 @@ done
 for organ in Reproductive_female Pulmonary Heart Brain Eye Hepatic Renal Reproductive_male Endocrine Immune Skin
 do
   output_dir_mr=${output_dir}/${organ}_proteomics_mortality_clock
-  harmonized_file=$output_dir_mr/harmonization_log_${organ}_proteomics_mortality_clock_2_${finngen}.tsv
+  harmonized_file=$output_dir_mr/harmonized_data_${organ}_proteomics_mortality_clock_2_${finngen}.tsv
   if [ -f "${harmonized_file}" ]; then
     output_file=${output_dir_mr}/MR_${organ}_2_${finngen}_OR.tsv
     if [ ! -f "${output_file}" ]; then
@@ -45,7 +45,7 @@ done
 for organ in Endocrine Digestive Hepatic Immune
 do
   output_dir_mr=${output_dir}/${organ}_metabolomics_mortality_clock
-  harmonized_file=$output_dir_mr/harmonization_log_${organ}_metabolomics_mortality_clock_2_${finngen}.tsv
+  harmonized_file=$output_dir_mr/harmonized_data_${organ}_metabolomics_mortality_clock_2_${finngen}.tsv
   if [ -f "${harmonized_file}" ]; then
     output_file=${output_dir_mr}/MR_${organ}_2_${finngen}_OR.tsv
     if [ ! -f "${output_file}" ]; then
