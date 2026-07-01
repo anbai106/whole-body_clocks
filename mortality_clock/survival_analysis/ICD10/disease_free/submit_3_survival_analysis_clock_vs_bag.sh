@@ -28,7 +28,7 @@ if [[ "${SLURM_ARRAY_TASK_ID}" -ge "${n_icd}" ]]; then
 fi
 
 icd="${icd_array[$SLURM_ARRAY_TASK_ID]}"
-icd_tsv="${sa_data_dir}/${icd}_diagnosis_clock.tsv"
+icd_tsv="${sa_data_dir}/${icd}_diagnosis_clock_disease_free.tsv"
 output_tsv="${out_dir}/cox_compare_clock_vs_BAG_${icd}.tsv"
 
 if [[ ! -f "${icd_tsv}" ]]; then
