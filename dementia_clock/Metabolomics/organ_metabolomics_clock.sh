@@ -37,7 +37,7 @@ echo "Output directory: ${outdir}"
 echo "Started at: $(date)"
 echo "============================================================"
 
-python /cbica/home/wenju/Project/whole-body_clocks/dementia_clock/Metabolomics/organ_metabolomics_dementia_clock.py \
+python /cbica/home/wenju/Project/whole-body_clocks/dementia_clock/Metabolomics/organ_metabolomics_clock.py \
   --dementia-xlsx /cbica/home/wenju/Dataset/UKBB_UMelbourne/Death_related_var_from_Ye.xlsx \
   --id-match-csv /cbica/home/wenju/Dataset/UKBB_UMelbourne/UKB_UMelbourne_vs_Penn_match_key.csv \
   --organ-tsv "/cbica/home/wenju/Reproducibile_paper/UKBB_metabolomics/MLNI/data/${organ}/PT/patient_pop_non_derived.tsv,/cbica/home/wenju/Reproducibile_paper/UKBB_metabolomics/MLNI/data/${organ}/test/ind_test_5000_non_derived.tsv,/cbica/home/wenju/Reproducibile_paper/UKBB_metabolomics/MLNI/data/${organ}/training/training_28142_non_derived.tsv" \
