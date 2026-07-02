@@ -22,6 +22,7 @@ do
   output_dir_har=${output_dir}/${organ}_mri_mortality_clock/harmonization
   mkdir -p ${output_dir_qc}
   mr_tsv=${output_dir_mr}/MR_${organ}_2_${finngen}_OR.tsv
+  modality=_mri_mortality_clock
   if [ -f "${mr_tsv}" ]; then
     p_value_thres=0.00009523809523809524 # 0.05/525
 
@@ -35,7 +36,7 @@ do
 
     if [ -n "$significant_pval" ]; then
       echo "Run 2SampleMR QC from ${organ} to ${finngen}..."
-      Rscript /cbica/home/wenju/Project/whole-body_clocks/mortality_clock/MR/Clock2DE/MR_5_qc.R ${organ} ${finngen} ${output_dir_qc} ${output_dir_har} ${output_dir_mr}
+      Rscript /cbica/home/wenju/Project/whole-body_clocks/mortality_clock/MR/Clock2DE/MR_5_qc.R ${organ} ${finngen} ${output_dir_qc} ${output_dir_har} ${output_dir_mr} ${modality}
     else
       echo "Not significant for ${organ}..."
     fi
@@ -50,6 +51,7 @@ do
   output_dir_mr=${output_dir}/${organ}_proteomics_mortality_clock/MR
   output_dir_qc=${output_dir}/${organ}_proteomics_mortality_clock/QC
   output_dir_har=${output_dir}/${organ}_proteomics_mortality_clock/harmonization
+  modality=_proteomics_mortality_clock
   mkdir -p ${output_dir_qc}
   mr_tsv=${output_dir_mr}/MR_${organ}_2_${finngen}_OR.tsv
   if [ -f "${mr_tsv}" ]; then
@@ -65,7 +67,7 @@ do
 
     if [ -n "$significant_pval" ]; then
       echo "Run 2SampleMR QC from ${organ} to ${finngen}..."
-      Rscript /cbica/home/wenju/Project/whole-body_clocks/mortality_clock/MR/Clock2DE/MR_5_qc.R ${organ} ${finngen} ${output_dir_qc} ${output_dir_har} ${output_dir_mr}
+      Rscript /cbica/home/wenju/Project/whole-body_clocks/mortality_clock/MR/Clock2DE/MR_5_qc.R ${organ} ${finngen} ${output_dir_qc} ${output_dir_har} ${output_dir_mr} ${modality}
     else
       echo "Not significant for ${organ}..."
     fi
@@ -81,6 +83,7 @@ do
   output_dir_qc=${output_dir}/${organ}_metabolomics_mortality_clock/QC
   output_dir_har=${output_dir}/${organ}_metabolomics_mortality_clock/harmonization
   mkdir -p ${output_dir_qc}
+  modality=_metabolomics_mortality_clock
   mr_tsv=${output_dir_mr}/MR_${organ}_2_${finngen}_OR.tsv
   if [ -f "${mr_tsv}" ]; then
     p_value_thres=0.00009523809523809524 # 0.05/525
@@ -95,7 +98,7 @@ do
 
     if [ -n "$significant_pval" ]; then
       echo "Run 2SampleMR QC from ${organ} to ${finngen}..."
-      Rscript /cbica/home/wenju/Project/whole-body_clocks/mortality_clock/MR/Clock2DE/MR_5_qc.R ${organ} ${finngen} ${output_dir_qc} ${output_dir_har} ${output_dir_mr}
+      Rscript /cbica/home/wenju/Project/whole-body_clocks/mortality_clock/MR/Clock2DE/MR_5_qc.R ${organ} ${finngen} ${output_dir_qc} ${output_dir_har} ${output_dir_mr} ${modality}
     else
       echo "Not significant for ${organ}..."
     fi
