@@ -26,7 +26,7 @@ echo "Output directory: ${outdir}"
 echo "Started at: $(date)"
 echo "============================================================"
 
-python /cbica/home/wenju/Project/whole-body_clocks/asthma_clock/MRI/brain_mri_asthma_clock.py \
+python /cbica/home/wenju/Project/whole-body_clocks/asthma_clock/MRI/brain_mri_clock.py \
   --asthma-xlsx /cbica/home/wenju/Dataset/UKBB_UMelbourne/Death_related_var_from_Ye.xlsx \
   --id-match-csv /cbica/home/wenju/Dataset/UKBB_UMelbourne/UKB_UMelbourne_vs_Penn_match_key.csv \
   --brain-tsv /cbica/home/wenju/Reproducibile_paper/BrainAge/data/imaging/T1_MUSE_GM.tsv \

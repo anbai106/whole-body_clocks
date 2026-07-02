@@ -37,7 +37,7 @@ echo "Output directory: ${outdir}"
 echo "Started at: $(date)"
 echo "============================================================"
 
-python /cbica/home/wenju/Project/whole-body_clocks/asthma_clock/Proteomics/organ_proteomics_asthma_clock.py \
+python /cbica/home/wenju/Project/whole-body_clocks/asthma_clock/Proteomics/organ_proteomics_clock.py \
   --asthma-xlsx /cbica/home/wenju/Dataset/UKBB_UMelbourne/Death_related_var_from_Ye.xlsx \
   --id-match-csv /cbica/home/wenju/Dataset/UKBB_UMelbourne/UKB_UMelbourne_vs_Penn_match_key.csv \
   --organ-tsv "/cbica/home/wenju/Reproducibile_paper/UKBB_Proteomics/MLNI/data/${organ}/training/training_4589.tsv,/cbica/home/wenju/Reproducibile_paper/UKBB_Proteomics/MLNI/data/${organ}/PT/patient_pop.tsv,/cbica/home/wenju/Reproducibile_paper/UKBB_Proteomics/MLNI/data/${organ}/test/ind_test_500.tsv" \
