@@ -20,6 +20,7 @@ for pgc in AD ADHD BIP SCZ
 do
     output_dir_mr=${output_dir}/${organ}/MR
     output_dir_qc=${output_dir}/${organ}/QC
+    mkdir -p ${output_dir_qc}
     output_dir_har=${output_dir}/${organ}/harmonization
     mr_tsv=${output_dir_mr}/MR_${organ_first}_2_${pgc}.tsv
     if [ -f "${mr_tsv}" ]; then

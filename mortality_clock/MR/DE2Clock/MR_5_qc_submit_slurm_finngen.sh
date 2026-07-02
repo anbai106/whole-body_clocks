@@ -24,6 +24,7 @@ do
     output_dir_har=${output_dir}/${organ}_mri_mortality_clock/harmonization
     output_dir_mr=${output_dir}/${organ}_mri_mortality_clock/MR
     output_dir_qc=${output_dir}/${organ}_mri_mortality_clock/QC
+    mkdir -p ${output_dir_qc}
     mr_tsv=${output_dir_mr}/MR_${finngen}_2_${organ}.tsv
     if [ -f "${mr_tsv}" ]; then
     p_value_thres=0.000234742 ### 0.05/N DEs
@@ -51,6 +52,7 @@ do
     output_dir_har=${output_dir}/${organ}_proteomics_mortality_clock/harmonization
     output_dir_mr=${output_dir}/${organ}_proteomics_mortality_clock/MR
     output_dir_qc=${output_dir}/${organ}_proteomics_mortality_clock/QC
+    mkdir -p ${output_dir_qc}
     mr_tsv=${output_dir_mr}/MR_${finngen}_2_${organ}.tsv
     if [ -f "${mr_tsv}" ]; then
     p_value_thres=0.000234742 ### 0.05/214 DEs
@@ -78,23 +80,24 @@ do
     output_dir_har=${output_dir}/${organ}_metabolomics_mortality_clock/harmonization
     output_dir_mr=${output_dir}/${organ}_metabolomics_mortality_clock/MR
     output_dir_qc=${output_dir}/${organ}_metabolomics_mortality_clock/QC
+    mkdir -p ${output_dir_qc}
     mr_tsv=${output_dir_mr}/MR_${finngen}_2_${organ}.tsv
     if [ -f "${mr_tsv}" ]; then
-    p_value_thres=0.000234742 ### 0.05/214 DEs
+      p_value_thres=0.000234742 ### 0.05/214 DEs
 
-    # Debugging: Check p-values
-    echo "Checking p-values in ${mr_tsv}..."
-    awk -F'\t' 'NR > 1 && $9 != "" {print $9}' "${mr_tsv}" | head
-    # Extract all p-values in the 9th column and check if any are below the threshold
-    significant_pval=$(awk -F'\t' 'NR > 1 && $9 != "" {print $9}' "${mr_tsv}" | \
-                       awk '{if ($1+0 < '"$p_value_thres"') print $1}' | head -n 1)
-    if [ -n "$significant_pval" ]; then
-      echo "Run 2SampleMR QC from ${finngen} to ${organ}..."
-      Rscript /cbica/home/wenju/Project/whole-body_clocks/mortality_clock/MR/DE2Clock/MR_5_qc.R ${finngen} ${organ} ${output_dir_qc} ${output_dir_har} ${output_dir_mr}
+      # Debugging: Check p-values
+      echo "Checking p-values in ${mr_tsv}..."
+      awk -F'\t' 'NR > 1 && $9 != "" {print $9}' "${mr_tsv}" | head
+      # Extract all p-values in the 9th column and check if any are below the threshold
+      significant_pval=$(awk -F'\t' 'NR > 1 && $9 != "" {print $9}' "${mr_tsv}" | \
+                         awk '{if ($1+0 < '"$p_value_thres"') print $1}' | head -n 1)
+      if [ -n "$significant_pval" ]; then
+        echo "Run 2SampleMR QC from ${finngen} to ${organ}..."
+        Rscript /cbica/home/wenju/Project/whole-body_clocks/mortality_clock/MR/DE2Clock/MR_5_qc.R ${finngen} ${organ} ${output_dir_qc} ${output_dir_har} ${output_dir_mr}
+      else
+        echo "Not significant for ${finngen}..."
+      fi
     else
-      echo "Not significant for ${finngen}..."
-    fi
-  else
     echo "File ${mr_tsv} not found."
-  fi
+    fi
 done
