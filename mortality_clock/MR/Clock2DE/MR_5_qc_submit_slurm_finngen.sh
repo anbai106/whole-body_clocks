@@ -3,7 +3,7 @@
 #SBATCH --job-name=Clock2DE
 #SBATCH --array=0-520
 #SBATCH --mem-per-cpu=12G
-#SBATCH --time=1-00:59:00
+#SBATCH --time=0-05:59:00
 #SBATCH --output=/cbica/home/wenju/output/Clock2DE%A_%a.out
 #SBATCH --error=/cbica/home/wenju/output/Clock2DE%A_%a.err
 
