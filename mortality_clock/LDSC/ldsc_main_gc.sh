@@ -66,12 +66,12 @@ echo "Start training"
 #  python /cbica/home/wenju/Project/ldsc/ldsc.py --rg ${stat_gz1},${stat_gz2} --ref-ld-chr ${ref_ld_chr} --w-ld-chr ${w_ld_chr} --out ${output_file}_${mae}
 #done
 
-##### 7 MRIBAGs
-for bag in brain adipose heart kidney liver pancreas spleen
-do
-  stat_gz2=/cbica/home/wenju/Reproducibile_paper/AbdoImaging/gc/${bag}/${bag}.sumstats.gz
-  python /cbica/home/wenju/Project/ldsc/ldsc.py --rg ${stat_gz1},${stat_gz2} --ref-ld-chr ${ref_ld_chr} --w-ld-chr ${w_ld_chr} --out ${output_file}_MRIBAG_${bag}
-done
+###### 7 MRIBAGs
+#for bag in brain adipose heart kidney liver pancreas spleen
+#do
+#  stat_gz2=/cbica/home/wenju/Reproducibile_paper/AbdoImaging/gc/${bag}/${bag}.sumstats.gz
+#  python /cbica/home/wenju/Project/ldsc/ldsc.py --rg ${stat_gz1},${stat_gz2} --ref-ld-chr ${ref_ld_chr} --w-ld-chr ${w_ld_chr} --out ${output_file}_MRIBAG_${bag}
+#done
 
 ### FinnGen
 summary_tsv='/cbica/projects/MULTI/processed/FinnGen/GWAS_summary_stats/summary_stats_R9_manifest_5000_cases.tsv'
@@ -79,7 +79,7 @@ variable=`awk '{print $1}' ${summary_tsv}`
 for de in $variable
 do
   if [ ${de} != "phenocode" ]; then
-    stat_gz2="/cbica/projects/MULTI/processed/FinnGen/LDSC/finngen_R9_${de}.sumstats.gz"
+    stat_gz2="/cbica/projects/MULTI/processed/FinnGen/LDSC/finngen_R9_${de}.sumstats.nonan.gz"
     python /cbica/home/wenju/Project/ldsc/ldsc.py --rg ${stat_gz1},${stat_gz2} --ref-ld-chr ${ref_ld_chr} --w-ld-chr ${w_ld_chr} --out ${output_file}_${de}
   fi
 done
@@ -90,7 +90,7 @@ variable=`awk -F'\t' '{print $2}' ${summary_tsv}`
 for de in $variable
 do
   if [ ${de} != "Phenotype" ]; then
-    stat_gz2="/cbica/projects/MULTI/processed/PGC/GWAS_summary_stats/Result/gc/ldsc/${de}.sumstats.gz"
+    stat_gz2="/cbica/projects/MULTI/processed/PGC/GWAS_summary_stats/${de}/${de}_PGC.sumstats.gz"
     python /cbica/home/wenju/Project/ldsc/ldsc.py --rg ${stat_gz1},${stat_gz2} --ref-ld-chr ${ref_ld_chr} --w-ld-chr ${w_ld_chr} --out ${output_file}_${de}
   fi
 done
