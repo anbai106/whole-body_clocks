@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Build a brain MRI copd L'EPOCH clock in UK Biobank using elastic-net Cox survival modeling.
+Build a brain MRI asthma L'EPOCH clock in UK Biobank using elastic-net Cox survival modeling.
 
 Time zero:
   UKB imaging assessment date, field 53-2.0
 
 Event:
-  incident copd date, field 42016-0.0, after imaging and before censoring
+  incident asthma date, field 42014-0.0, after imaging and before censoring
 
 Censoring:
   earlier of death date, field 40000-0.0 if available, and endpoint-specific administrative censor date
@@ -15,10 +15,10 @@ Brain-specific covariates:
   age at imaging, sex, DLICV/intracranial-volume adjustment, and optional UKB assessment center.
 
 Primary output:
-  brain_mri_copd_risk_score from the survival model.
+  brain_mri_asthma_risk_score from the survival model.
 
 Recommended downstream phenotype:
-  brain_mri_copd_clock_acceleration_z, the residualized risk score after adjusting for retained non-brain covariates in the training set.
+  brain_mri_asthma_clock_acceleration_z, the residualized risk score after adjusting for retained non-brain covariates in the training set.
 """
 
 import argparse
@@ -49,19 +49,19 @@ except ImportError as e:
         "or use your existing survival_clock conda environment."
     ) from e
 
-PREFIX = "brain_mri_copd_clock"
-RISK_COL = "brain_mri_copd_risk_score"
-ACCEL_Z_COL = "brain_mri_copd_clock_acceleration_z"
-ACCEL_YEARS_COL = "brain_mri_copd_clock_acceleration_years"
-CLOCK_AGE_COL = "brain_mri_copd_clock_age_years"
+PREFIX = "brain_mri_asthma_clock"
+RISK_COL = "brain_mri_asthma_risk_score"
+ACCEL_Z_COL = "brain_mri_asthma_clock_acceleration_z"
+ACCEL_YEARS_COL = "brain_mri_asthma_clock_acceleration_years"
+CLOCK_AGE_COL = "brain_mri_asthma_clock_age_years"
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Build brain MRI copd L'EPOCH clock.")
+    parser = argparse.ArgumentParser(description="Build brain MRI asthma L'EPOCH clock.")
     parser.add_argument(
-        "--copd-xlsx",
+        "--asthma-xlsx",
         default="/cbica/home/wenju/Dataset/UKBB_UMelbourne/Death_related_var_from_Ye.xlsx",
-        help="Excel file containing UKB assessment dates, copd date, and optionally death date.",
+        help="Excel file containing UKB assessment dates, asthma date, and optionally death date.",
     )
     parser.add_argument(
         "--id-match-csv",
@@ -81,7 +81,7 @@ def parse_args():
     parser.add_argument(
         "--admin-censor-date",
         required=True,
-        help="Endpoint-specific administrative censor date for copd ascertainment, e.g. 2022-11-30.",
+        help="Endpoint-specific administrative censor date for asthma ascertainment, e.g. 2022-11-30.",
     )
     parser.add_argument("--outdir", required=True, help="Output directory.")
     parser.add_argument(
@@ -109,32 +109,32 @@ def make_onehot_encoder():
         return OneHotEncoder(handle_unknown="ignore", sparse=False)
 
 
-def load_copd_data(copd_xlsx, id_match_csv):
-    d = pd.read_excel(copd_xlsx)
+def load_asthma_data(asthma_xlsx, id_match_csv):
+    d = pd.read_excel(asthma_xlsx)
     m = pd.read_csv(id_match_csv)
 
     d = d.rename(columns={"eid": "participant_id_umel"})
     m = m.rename(columns={"id": "participant_id_umel", "id_upenn": "participant_id"})
     d = m.merge(d, on="participant_id_umel", how="inner")
 
-    required = ["participant_id", "53-0.0", "53-2.0", "42016-0.0"]
+    required = ["participant_id", "53-0.0", "53-2.0", "42014-0.0"]
     missing = [c for c in required if c not in d.columns]
     if missing:
-        raise ValueError(f"copd/assessment file is missing required columns: {missing}")
+        raise ValueError(f"Asthma/assessment file is missing required columns: {missing}")
 
     keep = required.copy()
     if "40000-0.0" in d.columns:
         keep.append("40000-0.0")
     else:
         warnings.warn(
-            "Death date field 40000-0.0 was not found. copd-free participants "
+            "Death date field 40000-0.0 was not found. Asthma-free participants "
             "will be censored only at the administrative censor date."
         )
 
     d = d[keep].copy()
     d["baseline_date"] = pd.to_datetime(d["53-0.0"], errors="coerce")
     d["imaging_date"] = pd.to_datetime(d["53-2.0"], errors="coerce")
-    d["copd_date"] = pd.to_datetime(d["42016-0.0"], errors="coerce")
+    d["asthma_date"] = pd.to_datetime(d["42014-0.0"], errors="coerce")
     d["death_date"] = pd.to_datetime(d["40000-0.0"], errors="coerce") if "40000-0.0" in d.columns else pd.NaT
     return d
 
@@ -173,25 +173,25 @@ def load_covariates(covariate_csv):
 
 def construct_survival_dataset(df):
     """
-    Construct prospective copd survival outcome using imaging date as time zero.
+    Construct prospective asthma survival outcome using imaging date as time zero.
 
-    Exclude prevalent copd before/on imaging.
-    Event is incident copd after imaging and before censoring.
+    Exclude prevalent asthma before/on imaging.
+    Event is incident asthma after imaging and before censoring.
     Censor at the earlier of death date, if available, and administrative censor date.
     """
     df = df.copy()
 
-    df["copd_before_or_on_imaging"] = (
-        df["copd_date"].notna()
+    df["asthma_before_or_on_imaging"] = (
+        df["asthma_date"].notna()
         & df["imaging_date"].notna()
-        & (df["copd_date"] <= df["imaging_date"])
+        & (df["asthma_date"] <= df["imaging_date"])
     )
-    n_pre = int(df["copd_before_or_on_imaging"].sum())
+    n_pre = int(df["asthma_before_or_on_imaging"].sum())
     if n_pre > 0:
-        warnings.warn(f"Excluding {n_pre} participants with copd before/on imaging date.")
+        warnings.warn(f"Excluding {n_pre} participants with asthma before/on imaging date.")
 
     df = df.loc[df["imaging_date"].notna()].copy()
-    df = df.loc[~df["copd_before_or_on_imaging"]].copy()
+    df = df.loc[~df["asthma_before_or_on_imaging"]].copy()
 
     df["censor_date"] = df["admin_censor_date"]
     if "death_date" in df.columns:
@@ -201,12 +201,12 @@ def construct_survival_dataset(df):
     df = df.loc[df["imaging_date"] <= df["censor_date"]].copy()
 
     df["event"] = (
-        df["copd_date"].notna()
-        & (df["copd_date"] > df["imaging_date"])
-        & (df["copd_date"] <= df["censor_date"])
+        df["asthma_date"].notna()
+        & (df["asthma_date"] > df["imaging_date"])
+        & (df["asthma_date"] <= df["censor_date"])
     )
     df["end_date"] = df["censor_date"]
-    df.loc[df["event"], "end_date"] = df.loc[df["event"], "copd_date"]
+    df.loc[df["event"], "end_date"] = df.loc[df["event"], "asthma_date"]
     df["time_days"] = (df["end_date"] - df["imaging_date"]).dt.days
     df["time_years"] = df["time_days"] / 365.25
     return df
@@ -634,9 +634,9 @@ def main():
     admin_censor_date = pd.to_datetime(args.admin_censor_date)
     l1_ratios = tuple(float(x) for x in args.l1_ratios.split(","))
 
-    print("Loading copd/assessment data...")
-    copd = load_copd_data(args.copd_xlsx, args.id_match_csv)
-    copd["admin_censor_date"] = admin_censor_date
+    print("Loading asthma/assessment data...")
+    asthma = load_asthma_data(args.asthma_xlsx, args.id_match_csv)
+    asthma["admin_censor_date"] = admin_censor_date
 
     print("Loading brain MRI data...")
     brain = load_brain_data(args.brain_tsv, args.imaging_session_id)
@@ -645,11 +645,11 @@ def main():
     cov = load_covariates(args.covariate_csv)
 
     print("Merging data...")
-    df = brain.merge(copd, on="participant_id", how="inner")
+    df = brain.merge(asthma, on="participant_id", how="inner")
     if cov is not None:
         df = df.merge(cov, on="participant_id", how="left", suffixes=("", "_cov"))
 
-    print("Constructing prospective copd survival outcome...")
+    print("Constructing prospective asthma survival outcome...")
     df = construct_survival_dataset(df)
     df = df.loc[df["time_days"] >= args.min_followup_days].copy()
 
@@ -662,15 +662,15 @@ def main():
     required_model_cols = ["participant_id", "time_years", "event", "age_at_imaging", "sex"]
     df = df.dropna(subset=required_model_cols).copy()
 
-    print("Final prospective imaging copd dataset:")
+    print("Final prospective imaging asthma dataset:")
     print(f"  N = {df.shape[0]}")
-    print(f"  Incident copd events after imaging = {int(df['event'].sum())}")
+    print(f"  Incident asthma events after imaging = {int(df['event'].sum())}")
     print(f"  Censored = {int((~df['event']).sum())}")
     print(f"  Median follow-up years = {df['time_years'].median():.2f}")
     if df["event"].sum() < 20:
-        warnings.warn("Very few copd events. The fitted brain MRI copd clock may be unstable.")
+        warnings.warn("Very few asthma events. The fitted brain MRI asthma clock may be unstable.")
 
-    keep_dataset_cols = ["participant_id", "baseline_date", "imaging_date", "copd_date", "death_date", "admin_censor_date", "censor_date", "end_date", "time_days", "time_years", "event", "age_at_imaging", "sex"]
+    keep_dataset_cols = ["participant_id", "baseline_date", "imaging_date", "asthma_date", "death_date", "admin_censor_date", "censor_date", "end_date", "time_days", "time_years", "event", "age_at_imaging", "sex"]
     if "DLICV" in df.columns:
         keep_dataset_cols.append("DLICV")
     df[keep_dataset_cols].to_csv(outdir / f"{PREFIX}_survival_dataset.tsv", sep="\t", index=False)
@@ -757,7 +757,7 @@ def main():
     print(delta_cindex_df.to_string(index=False))
 
     def make_pred_frame(part, split, risk):
-        base = ["participant_id", "imaging_date", "copd_date", "death_date", "admin_censor_date", "censor_date", "end_date", "time_years", "event", "age_at_imaging", "sex"]
+        base = ["participant_id", "imaging_date", "asthma_date", "death_date", "admin_censor_date", "censor_date", "end_date", "time_years", "event", "age_at_imaging", "sex"]
         if "DLICV" in part.columns:
             base.append("DLICV")
         extra = [c for c in residualization_covariates if c in part.columns and c not in base]
@@ -786,7 +786,7 @@ def main():
     pred_test = pd.concat([pred_test.reset_index(drop=True), predict_absolute_risk(final_model, X_test, risk_times)], axis=1)
     pred_all = pd.concat([pred_train, pred_val, pred_test], ignore_index=True)
 
-    print("Adding residualized copd-clock acceleration...")
+    print("Adding residualized asthma-clock acceleration...")
     pred_all, clock_transform_info = add_clock_age_and_acceleration(pred_all, residualization_covariates)
     pred_all.to_csv(outdir / f"{PREFIX}_predictions.tsv", sep="\t", index=False)
     pred_test.to_csv(outdir / f"{PREFIX}_test_predictions.tsv", sep="\t", index=False)
@@ -864,9 +864,9 @@ def main():
         "residualization_covariates": residualization_covariates,
         "admin_censor_date": str(admin_censor_date.date()),
         "time_zero": "UKB imaging assessment date, field 53-2.0",
-        "event_date": "UKB copd date, field 42016-0.0",
+        "event_date": "UKB asthma date, field 42014-0.0",
         "censoring": "earlier of death date field 40000-0.0 and endpoint-specific administrative censor date",
-        "note": "Primary score is brain_mri_copd_risk_score from elastic-net Cox. Acceleration z-score is residualized on retained non-brain covariates and is recommended for downstream analyses.",
+        "note": "Primary score is brain_mri_asthma_risk_score from elastic-net Cox. Acceleration z-score is residualized on retained non-brain covariates and is recommended for downstream analyses.",
     }
     with open(outdir / f"{PREFIX}_performance.json", "w") as f:
         json.dump(performance, f, indent=2)

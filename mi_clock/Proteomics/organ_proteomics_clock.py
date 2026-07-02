@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-General organ metabolomics asthma clock using elastic-net Cox survival modeling.
+General organ proteomics mi clock using elastic-net Cox survival modeling.
 
 The organ feature TSV can be one file or a comma-separated list of files. The
 script concatenates them, optionally filters to session_id if requested, and treats all
-columns after --feature-start-column (default: diagnosis) as organ metabolomics features.
-Baseline metabolomics/metabolomics variables use UKB instance 0_0, and survival time zero
+columns after --feature-start-column (default: diagnosis) as organ proteomics features.
+Baseline proteomics/metabolomics variables use UKB instance 0_0, and survival time zero
 is the baseline assessment date, UKB field 53-0.0.
 
 Output naming is controlled by --organ, e.g. --organ heart creates:
-  heart_metabolomics_asthma_clock_predictions.tsv
-  heart_metabolomics_asthma_clock_performance.json
+  heart_proteomics_mi_clock_predictions.tsv
+  heart_proteomics_mi_clock_performance.json
   etc.
 """
 
@@ -47,14 +47,14 @@ except ImportError as e:
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--organ", required=True, help="Organ name for dynamic output naming, e.g. heart, liver, kidney.")
-    p.add_argument("--asthma-xlsx", default="/cbica/home/wenju/Dataset/UKBB_UMelbourne/Death_related_var_from_Ye.xlsx")
+    p.add_argument("--mi-xlsx", default="/cbica/home/wenju/Dataset/UKBB_UMelbourne/Death_related_var_from_Ye.xlsx")
     p.add_argument("--id-match-csv", default="/cbica/home/wenju/Dataset/UKBB_UMelbourne/UKB_UMelbourne_vs_Penn_match_key.csv")
     p.add_argument("--organ-tsv", required=True, help="One TSV or comma-separated list/globs of TSVs.")
     p.add_argument("--covariate-csv", default="/cbica/home/wenju/Reproducibile_paper/PRS_UKBB/prediction/data/UKBB_fullsample_covariate.csv")
     p.add_argument("--admin-censor-date", required=True)
     p.add_argument("--outdir", required=True)
     p.add_argument("--omics-session-id", "--imaging-session-id", dest="imaging_session_id", default="none", help="Baseline omics session_id to keep if present; default disables filtering.")
-    p.add_argument("--feature-start-column", default="diagnosis", help="All columns after this column are organ metabolomics features.")
+    p.add_argument("--feature-start-column", default="diagnosis", help="All columns after this column are organ proteomics features.")
     p.add_argument("--test-size", type=float, default=0.20)
     p.add_argument("--validation-size", type=float, default=0.20)
     p.add_argument("--random-state", type=int, default=2026)
@@ -83,46 +83,46 @@ def make_onehot_encoder():
 
 
 def output_prefix(organ):
-    return f"{organ}_metabolomics_asthma_clock"
+    return f"{organ}_proteomics_mi_clock"
 
 
-def load_asthma_data(asthma_xlsx, id_match_csv):
+def load_mi_data(mi_xlsx, id_match_csv):
     """
-    Load UKB assessment dates, asthma date, and death date.
+    Load UKB assessment dates, mi date, and death date.
 
-    Metabolomics is treated as baseline omics, so time zero is the baseline
-    assessment date from UMelbourne field 53-0.0. Asthma event date is
-    UKB field 42014-0.0. Death date, if available, is used as a competing
-    censoring time for asthma-free participants.
+    Proteomics is treated as baseline omics, so time zero is the baseline
+    assessment date from UMelbourne field 53-0.0. mi event date is
+    UKB field 42000-0.0. Death date, if available, is used as a competing
+    censoring time for mi-free participants.
     """
-    d = pd.read_excel(asthma_xlsx)
+    d = pd.read_excel(mi_xlsx)
     m = pd.read_csv(id_match_csv)
 
     d = d.rename(columns={"eid": "participant_id_umel"})
     m = m.rename(columns={"id": "participant_id_umel", "id_upenn": "participant_id"})
     d = m.merge(d, on="participant_id_umel", how="inner")
 
-    required = ["participant_id", "53-0.0", "42014-0.0"]
+    required = ["participant_id", "53-0.0", "42000-0.0"]
     missing = [c for c in required if c not in d.columns]
     if missing:
-        raise ValueError(f"Asthma/assessment file is missing required columns: {missing}")
+        raise ValueError(f"mi/assessment file is missing required columns: {missing}")
 
     keep = required.copy()
 
     # UKB death date is commonly field 40000-0.0.
-    # Keep it if available so asthma-free participants can be censored at death.
+    # Keep it if available so mi-free participants can be censored at death.
     if "40000-0.0" in d.columns:
         keep.append("40000-0.0")
     else:
         warnings.warn(
             "Death date field 40000-0.0 was not found. "
-            "Asthma-free participants will be censored only at the administrative censor date."
+            "mi-free participants will be censored only at the administrative censor date."
         )
 
     d = d[keep].copy()
     d["baseline_date"] = pd.to_datetime(d["53-0.0"], errors="coerce")
     d["sample_date"] = d["baseline_date"]
-    d["asthma_date"] = pd.to_datetime(d["42014-0.0"], errors="coerce")
+    d["mi_date"] = pd.to_datetime(d["42000-0.0"], errors="coerce")
 
     if "40000-0.0" in d.columns:
         d["death_date"] = pd.to_datetime(d["40000-0.0"], errors="coerce")
@@ -184,7 +184,7 @@ def infer_feature_columns(df_organ, feature_start_column):
     excluded = {"organ_source_file", "organ_source_order", "organ_source_row", "participant_id", "session_id", feature_start_column}
     features = [c for c in list(df_organ.columns[start:]) if c not in excluded]
     if not features:
-        raise ValueError(f"No metabolomics features found after {feature_start_column}.")
+        raise ValueError(f"No proteomics features found after {feature_start_column}.")
     print(f"Feature rule: all columns after '{feature_start_column}'. N={len(features)}")
     print(f"First feature: {features[0]}")
     print(f"Last feature:  {features[-1]}")
@@ -206,14 +206,14 @@ def load_covariates(path):
 
 def construct_survival_dataset(df):
     """
-    Construct prospective asthma survival outcome using baseline sample date as time zero.
+    Construct prospective mi survival outcome using baseline sample date as time zero.
 
     Event:
-        Incident asthma after baseline sample date and before censoring.
+        Incident mi after baseline sample date and before censoring.
 
     Exclusions:
         - Missing baseline/sample date
-        - Asthma before or on baseline sample date
+        - mi before or on baseline sample date
         - Baseline/sample date after censoring
 
     Censoring:
@@ -222,18 +222,18 @@ def construct_survival_dataset(df):
     """
     df = df.copy()
 
-    df["asthma_before_or_on_sample"] = (
-        df["asthma_date"].notna()
+    df["mi_before_or_on_sample"] = (
+        df["mi_date"].notna()
         & df["sample_date"].notna()
-        & (df["asthma_date"] <= df["sample_date"])
+        & (df["mi_date"] <= df["sample_date"])
     )
 
-    n_pre = int(df["asthma_before_or_on_sample"].sum())
+    n_pre = int(df["mi_before_or_on_sample"].sum())
     if n_pre:
-        warnings.warn(f"Excluding {n_pre} participants with asthma before/on baseline sample date.")
+        warnings.warn(f"Excluding {n_pre} participants with mi before/on baseline sample date.")
 
     df = df.loc[df["sample_date"].notna()].copy()
-    df = df.loc[~df["asthma_before_or_on_sample"]].copy()
+    df = df.loc[~df["mi_before_or_on_sample"]].copy()
 
     # Censor at the earlier of admin censor date and death date.
     df["censor_date"] = df["admin_censor_date"]
@@ -248,15 +248,15 @@ def construct_survival_dataset(df):
     # Remove participants whose baseline/sample date is after censoring.
     df = df.loc[df["sample_date"] <= df["censor_date"]].copy()
 
-    # Incident asthma must occur after sample date and on/before censor date.
+    # Incident mi must occur after sample date and on/before censor date.
     df["event"] = (
-        df["asthma_date"].notna()
-        & (df["asthma_date"] > df["sample_date"])
-        & (df["asthma_date"] <= df["censor_date"])
+        df["mi_date"].notna()
+        & (df["mi_date"] > df["sample_date"])
+        & (df["mi_date"] <= df["censor_date"])
     )
 
     df["end_date"] = df["censor_date"]
-    df.loc[df["event"], "end_date"] = df.loc[df["event"], "asthma_date"]
+    df.loc[df["event"], "end_date"] = df.loc[df["event"], "mi_date"]
 
     df["time_days"] = (df["end_date"] - df["sample_date"]).dt.days
     df["time_years"] = df["time_days"] / 365.25
@@ -478,7 +478,7 @@ def paired_bootstrap_delta_cindex(y, risk_full, risk_base, organ, n_boot, random
         except Exception:
             continue
     boots = np.asarray(boots, dtype=float)
-    comparison = f"M3_full_covariates_plus_{organ}_metabolomics_vs_M1_covariate_baseline"
+    comparison = f"M3_full_covariates_plus_{organ}_proteomics_vs_M1_covariate_baseline"
     if boots.size == 0:
         return {"comparison": comparison, "cindex_full": c_full, "cindex_baseline": c_base, "delta_cindex": delta, "delta_cindex_ci_lower": np.nan, "delta_cindex_ci_upper": np.nan, "n_bootstrap_requested": int(n_boot), "n_bootstrap_successful": 0, "empirical_p_two_sided_delta_not_equal_0": np.nan, "empirical_p_one_sided_delta_le_0": np.nan, "interpretation": "Bootstrap failed."}
     lo, hi = np.quantile(boots, [0.025, 0.975])
@@ -486,11 +486,11 @@ def paired_bootstrap_delta_cindex(y, risk_full, risk_base, organ, n_boot, random
     p_ge0 = float(np.mean(boots >= 0.0))
     p2 = float(min(1.0, 2.0 * min(p_le0, p_ge0)))
     if delta > 0 and lo > 0:
-        interp = f"{organ} metabolomics improves test-set C-index beyond the covariate baseline."
+        interp = f"{organ} proteomics improves test-set C-index beyond the covariate baseline."
     elif delta > 0:
-        interp = f"{organ} metabolomics has positive delta C-index, but the bootstrap CI includes or approaches zero."
+        interp = f"{organ} proteomics has positive delta C-index, but the bootstrap CI includes or approaches zero."
     else:
-        interp = f"No evidence that {organ} metabolomics improves test-set C-index beyond the covariate baseline."
+        interp = f"No evidence that {organ} proteomics improves test-set C-index beyond the covariate baseline."
     return {"comparison": comparison, "cindex_full": float(c_full), "cindex_baseline": float(c_base), "delta_cindex": float(delta), "delta_cindex_ci_lower": float(lo), "delta_cindex_ci_upper": float(hi), "n_bootstrap_requested": int(n_boot), "n_bootstrap_successful": int(boots.size), "empirical_p_two_sided_delta_not_equal_0": p2, "empirical_p_one_sided_delta_le_0": p_le0, "interpretation": interp}
 
 
@@ -498,8 +498,8 @@ def run_incremental_value_analysis(X_train, X_val, X_test, X_trainval, y_train, 
     is_org = organ_feature_mask(feature_names, organ_feature_cols)
     is_age = feature_names == "num__age_at_baseline"
     is_sex = np.char.startswith(feature_names.astype(str), "cat__sex")
-    m2 = f"M2_{organ}_metabolomics_only"
-    m3 = f"M3_full_covariates_plus_{organ}_metabolomics"
+    m2 = f"M2_{organ}_proteomics_only"
+    m3 = f"M3_full_covariates_plus_{organ}_proteomics"
     idx = {
         "M0_age_sex": np.where(is_age | is_sex)[0],
         "M1_covariate_baseline": np.where(~is_org)[0],
@@ -521,7 +521,7 @@ def run_incremental_value_analysis(X_train, X_val, X_test, X_trainval, y_train, 
     fitting_methods[m3] = "Selected elastic-net Cox model from main pipeline"
     for split, (X, _) in split_data.items():
         risk_predictions[split][m3] = predict_risk_score(final_model, X)
-    labels = {"M0_age_sex": "Age + sex", "M1_covariate_baseline": "Covariate baseline", m2: f"{organ} metabolomics only", m3: f"Covariates + {organ} metabolomics"}
+    labels = {"M0_age_sex": "Age + sex", "M1_covariate_baseline": "Covariate baseline", m2: f"{organ} proteomics only", m3: f"Covariates + {organ} proteomics"}
     rows = []
     for model_name in ["M0_age_sex", "M1_covariate_baseline", m2, m3]:
         for split, (_, y) in split_data.items():
@@ -553,10 +553,10 @@ def predict_absolute_risk(model, X, times_years):
 
 def add_clock_age_and_acceleration(pred_df, organ, covariate_cols):
     df = pred_df.copy()
-    risk_col = f"{organ}_metabolomics_asthma_risk_score"
-    z_col = f"{organ}_metabolomics_asthma_clock_acceleration_z"
-    yrs_col = f"{organ}_metabolomics_asthma_clock_acceleration_years"
-    age_col = f"{organ}_metabolomics_asthma_clock_age_years"
+    risk_col = f"{organ}_proteomics_mi_risk_score"
+    z_col = f"{organ}_proteomics_mi_clock_acceleration_z"
+    yrs_col = f"{organ}_proteomics_mi_clock_acceleration_years"
+    age_col = f"{organ}_proteomics_mi_clock_age_years"
     covariate_cols = [c for c in covariate_cols if c in df.columns]
     if "age_at_baseline" not in covariate_cols and "age_at_baseline" in df.columns:
         covariate_cols = ["age_at_baseline"] + covariate_cols
@@ -624,13 +624,13 @@ def main():
     outdir.mkdir(parents=True, exist_ok=True)
     admin_censor_date = pd.to_datetime(args.admin_censor_date)
     l1_ratios = tuple(float(x) for x in args.l1_ratios.split(","))
-    print(f"Building {organ} metabolomics asthma clock")
+    print(f"Building {organ} proteomics mi clock")
 
-    print("Loading asthma/assessment data...")
-    asthma = load_asthma_data(args.asthma_xlsx, args.id_match_csv)
-    asthma["admin_censor_date"] = admin_censor_date
+    print("Loading mi/assessment data...")
+    mi = load_mi_data(args.mi_xlsx, args.id_match_csv)
+    mi["admin_censor_date"] = admin_censor_date
 
-    print(f"Loading {organ} metabolomics data...")
+    print(f"Loading {organ} proteomics data...")
     organ_df = load_organ_data(args.organ_tsv, organ, args.imaging_session_id)
     organ_feature_cols = infer_feature_columns(organ_df, args.feature_start_column)
 
@@ -638,7 +638,7 @@ def main():
     cov = load_covariates(args.covariate_csv)
 
     print("Merging data...")
-    df = organ_df.merge(asthma, on="participant_id", how="inner")
+    df = organ_df.merge(mi, on="participant_id", how="inner")
     if cov is not None:
         df = df.merge(cov, on="participant_id", how="left", suffixes=("", "_cov"))
 
@@ -651,15 +651,15 @@ def main():
     df, numeric_cols, categorical_cols, _, organ_feature_cols = build_design_matrix(df, organ_feature_cols)
     df = df.dropna(subset=["participant_id", "time_years", "event", "age_at_baseline", "sex"]).copy()
 
-    print("Final prospective baseline-omics asthma dataset:")
+    print("Final prospective baseline-omics mi dataset:")
     print(f"  N = {df.shape[0]}")
-    print(f"  Incident asthma events after baseline = {int(df['event'].sum())}")
+    print(f"  Incident mi events after baseline = {int(df['event'].sum())}")
     print(f"  Censored = {int((~df['event']).sum())}")
     print(f"  Median follow-up years = {df['time_years'].median():.2f}")
     if df["event"].sum() < 20:
-        warnings.warn("Very few asthma events. The fitted clock may be unstable.")
+        warnings.warn("Very few mi events. The fitted clock may be unstable.")
 
-    dataset_cols = ["participant_id", "baseline_date", "sample_date", "asthma_date", "death_date", "admin_censor_date", "censor_date", "end_date", "time_days", "time_years", "event", "age_at_baseline", "age_at_imaging", "sex"]
+    dataset_cols = ["participant_id", "baseline_date", "sample_date", "mi_date", "death_date", "admin_censor_date", "censor_date", "end_date", "time_days", "time_years", "event", "age_at_baseline", "age_at_imaging", "sex"]
     if "organ_source_file" in df.columns:
         dataset_cols.append("organ_source_file")
     df[dataset_cols].to_csv(outdir / f"{pref}_survival_dataset.tsv", sep="\t", index=False)
@@ -717,7 +717,7 @@ def main():
     print(f"Train+Val C-index: {cindex_trainval:.4f}")
     print(f"Test C-index:      {cindex_test:.4f}")
 
-    print(f"Running incremental-value analysis: does {organ} metabolomics add value beyond covariates?")
+    print(f"Running incremental-value analysis: does {organ} proteomics add value beyond covariates?")
     inc = run_incremental_value_analysis(X_train, X_val, X_test, X_trainval, y_train, y_val, y_test, y_trainval, feature_names, organ_feature_cols, organ, final_model, args.n_bootstrap_incremental, args.random_state)
     model_comparison_df = inc["model_comparison_df"]
     delta_cindex_df = inc["delta_cindex_df"]
@@ -727,9 +727,9 @@ def main():
     delta_cindex_df.to_csv(outdir / f"{pref}_incremental_value_delta_cindex.tsv", sep="\t", index=False)
     print(delta_cindex_df.to_string(index=False))
 
-    risk_col = f"{organ}_metabolomics_asthma_risk_score"
+    risk_col = f"{organ}_proteomics_mi_risk_score"
     def make_pred_frame(part, split, risk):
-        base = ["participant_id", "sample_date", "asthma_date", "death_date", "admin_censor_date", "censor_date", "end_date", "time_years", "event", "age_at_baseline", "age_at_imaging", "sex"]
+        base = ["participant_id", "sample_date", "mi_date", "death_date", "admin_censor_date", "censor_date", "end_date", "time_years", "event", "age_at_baseline", "age_at_imaging", "sex"]
         if "organ_source_file" in part.columns:
             base.append("organ_source_file")
         extra = [c for c in residualization_covariates if c in part.columns and c not in base]
@@ -742,7 +742,7 @@ def main():
     pred_val = make_pred_frame(df_val, "validation", risk_val)
     pred_test = make_pred_frame(df_test, "test", risk_test)
     m2, m3 = inc["model_m2"], inc["model_m3"]
-    comparison_cols = {"M0_age_sex": "risk_score_M0_age_sex", "M1_covariate_baseline": "risk_score_M1_covariate_baseline", m2: f"risk_score_M2_{organ}_metabolomics_only", m3: f"risk_score_M3_full_covariates_plus_{organ}_metabolomics"}
+    comparison_cols = {"M0_age_sex": "risk_score_M0_age_sex", "M1_covariate_baseline": "risk_score_M1_covariate_baseline", m2: f"risk_score_M2_{organ}_proteomics_only", m3: f"risk_score_M3_full_covariates_plus_{organ}_proteomics"}
     for model_name, col in comparison_cols.items():
         pred_train[col] = inc["risk_predictions"]["train"][model_name]
         pred_val[col] = inc["risk_predictions"]["validation"][model_name]
@@ -753,7 +753,7 @@ def main():
     pred_val = pd.concat([pred_val.reset_index(drop=True), predict_absolute_risk(final_model, X_val, risk_times)], axis=1)
     pred_test = pd.concat([pred_test.reset_index(drop=True), predict_absolute_risk(final_model, X_test, risk_times)], axis=1)
     pred_all = pd.concat([pred_train, pred_val, pred_test], ignore_index=True)
-    print("Adding approximate asthma-clock age and acceleration...")
+    print("Adding approximate mi-clock age and acceleration...")
     pred_all, clock_transform_info = add_clock_age_and_acceleration(pred_all, organ, residualization_covariates)
     pred_all.to_csv(outdir / f"{pref}_predictions.tsv", sep="\t", index=False)
     pred_test.to_csv(outdir / f"{pref}_test_predictions.tsv", sep="\t", index=False)
@@ -761,7 +761,7 @@ def main():
     print("Saving coefficients...")
     coef = np.asarray(final_model.coef_).reshape(-1)
     is_org = organ_feature_mask(feature_names, organ_feature_cols)
-    coef_df = pd.DataFrame({"feature": feature_names, "coefficient": coef, "abs_coefficient": np.abs(coef), "penalty_factor": penalty_factor, "is_nonzero": coef != 0, f"is_{organ}_metabolomics_feature": is_org}).sort_values("abs_coefficient", ascending=False)
+    coef_df = pd.DataFrame({"feature": feature_names, "coefficient": coef, "abs_coefficient": np.abs(coef), "penalty_factor": penalty_factor, "is_nonzero": coef != 0, f"is_{organ}_proteomics_feature": is_org}).sort_values("abs_coefficient", ascending=False)
     coef_df.to_csv(outdir / f"{pref}_coefficients.tsv", sep="\t", index=False)
     nonzero_coef_df = coef_df.loc[coef_df["is_nonzero"]].copy()
     nonzero_coef_df.to_csv(outdir / f"{pref}_nonzero_coefficients.tsv", sep="\t", index=False)
@@ -770,7 +770,7 @@ def main():
     joblib.dump(model_bundle, outdir / f"{pref}_model.joblib")
 
     delta_row = delta_cindex_df.iloc[0]
-    performance = {"organ": organ, "n_total": int(df.shape[0]), "n_events_total": int(df["event"].sum()), "n_censored_total": int((~df["event"]).sum()), "median_followup_years": float(df["time_years"].median()), "n_train": int(df_train.shape[0]), "n_events_train": int(df_train["event"].sum()), "n_validation": int(df_val.shape[0]), "n_events_validation": int(df_val["event"].sum()), "n_test": int(df_test.shape[0]), "n_events_test": int(df_test["event"].sum()), "cindex_train": float(cindex_train), "cindex_validation": float(cindex_val), "cindex_trainval": float(cindex_trainval), "cindex_test": float(cindex_test), "incremental_value_model_comparison": model_comparison_records, "incremental_value_delta_cindex": delta_cindex_records, "cindex_test_M1_covariate_baseline": float(model_comparison_df.loc[(model_comparison_df["model"] == "M1_covariate_baseline") & (model_comparison_df["split"] == "test"), "cindex"].iloc[0]), f"cindex_test_M3_full_covariates_plus_{organ}_metabolomics": float(model_comparison_df.loc[(model_comparison_df["model"] == m3) & (model_comparison_df["split"] == "test"), "cindex"].iloc[0]), "delta_cindex_test_M3_vs_M1": float(delta_row["delta_cindex"]), "delta_cindex_test_M3_vs_M1_ci_lower": float(delta_row["delta_cindex_ci_lower"]), "delta_cindex_test_M3_vs_M1_ci_upper": float(delta_row["delta_cindex_ci_upper"]), "delta_cindex_test_M3_vs_M1_p_two_sided": float(delta_row["empirical_p_two_sided_delta_not_equal_0"]), "best_l1_ratio": float(best["l1_ratio"]), "best_alpha": float(best["alpha"]), "best_validation_cindex_during_tuning": float(best["cindex"]), "used_penalty_factor": bool(best["used_penalty_factor"]), "n_original_organ_features": int(len(organ_feature_cols)), f"n_original_{organ}_features": int(len(organ_feature_cols)), "n_numeric_cols_kept": int(len(numeric_cols_kept)), "n_categorical_cols_kept": int(len(categorical_cols_kept)), "n_nonzero_coefficients": int(nonzero_coef_df.shape[0]), "n_residualization_covariates": int(len(residualization_covariates)), "residualization_covariates": residualization_covariates, "organ_tsv_input": args.organ_tsv, "feature_start_column": args.feature_start_column, "admin_censor_date": str(admin_censor_date.date()), "time_zero": "UKB baseline assessment date / metabolomics sample date, field 53-0.0", "event_date": "UKB asthma date, field 42014-0.0", "note": f"Primary score is {organ}_metabolomics_asthma_risk_score from elastic-net Cox. Clock age/acceleration are post-hoc residualized transforms adjusted for retained non-organ covariates."}
+    performance = {"organ": organ, "n_total": int(df.shape[0]), "n_events_total": int(df["event"].sum()), "n_censored_total": int((~df["event"]).sum()), "median_followup_years": float(df["time_years"].median()), "n_train": int(df_train.shape[0]), "n_events_train": int(df_train["event"].sum()), "n_validation": int(df_val.shape[0]), "n_events_validation": int(df_val["event"].sum()), "n_test": int(df_test.shape[0]), "n_events_test": int(df_test["event"].sum()), "cindex_train": float(cindex_train), "cindex_validation": float(cindex_val), "cindex_trainval": float(cindex_trainval), "cindex_test": float(cindex_test), "incremental_value_model_comparison": model_comparison_records, "incremental_value_delta_cindex": delta_cindex_records, "cindex_test_M1_covariate_baseline": float(model_comparison_df.loc[(model_comparison_df["model"] == "M1_covariate_baseline") & (model_comparison_df["split"] == "test"), "cindex"].iloc[0]), f"cindex_test_M3_full_covariates_plus_{organ}_proteomics": float(model_comparison_df.loc[(model_comparison_df["model"] == m3) & (model_comparison_df["split"] == "test"), "cindex"].iloc[0]), "delta_cindex_test_M3_vs_M1": float(delta_row["delta_cindex"]), "delta_cindex_test_M3_vs_M1_ci_lower": float(delta_row["delta_cindex_ci_lower"]), "delta_cindex_test_M3_vs_M1_ci_upper": float(delta_row["delta_cindex_ci_upper"]), "delta_cindex_test_M3_vs_M1_p_two_sided": float(delta_row["empirical_p_two_sided_delta_not_equal_0"]), "best_l1_ratio": float(best["l1_ratio"]), "best_alpha": float(best["alpha"]), "best_validation_cindex_during_tuning": float(best["cindex"]), "used_penalty_factor": bool(best["used_penalty_factor"]), "n_original_organ_features": int(len(organ_feature_cols)), f"n_original_{organ}_features": int(len(organ_feature_cols)), "n_numeric_cols_kept": int(len(numeric_cols_kept)), "n_categorical_cols_kept": int(len(categorical_cols_kept)), "n_nonzero_coefficients": int(nonzero_coef_df.shape[0]), "n_residualization_covariates": int(len(residualization_covariates)), "residualization_covariates": residualization_covariates, "organ_tsv_input": args.organ_tsv, "feature_start_column": args.feature_start_column, "admin_censor_date": str(admin_censor_date.date()), "time_zero": "UKB baseline assessment date / proteomics sample date, field 53-0.0", "event_date": "UKB mi date, field 42000-0.0", "note": f"Primary score is {organ}_proteomics_mi_risk_score from elastic-net Cox. Clock age/acceleration are post-hoc residualized transforms adjusted for retained non-organ covariates."}
     with open(outdir / f"{pref}_performance.json", "w") as f:
         json.dump(performance, f, indent=2)
 
