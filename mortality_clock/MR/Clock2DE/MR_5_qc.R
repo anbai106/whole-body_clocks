@@ -7,6 +7,7 @@ pheno2 <- args[2]
 output_dir_qc <- args[3]
 output_dir_har <- args[4]
 output_dir_mr <- args[5]
+modality <- args[6]
 
 .libPaths('/gpfs/fs001/cbica/home/wenju/R/x86_64-pc-linux-gnu-library/4.3')
 
@@ -19,7 +20,7 @@ library(svglite)
 ## output dir
 print(paste0("Exposure: ", pheno1))
 print(paste0("Outcome: ", pheno2))
-hamonized_tsv = paste(output_dir_har,  paste('harmonized_data_', pheno1, '_2_', pheno2, '.tsv', sep=""), sep = '/')
+hamonized_tsv = paste(output_dir_har,  paste('harmonized_data_', pheno1, modality, '_2_', pheno2, '.tsv', sep=""), sep = '/')
 hamonized_data <- read.table(hamonized_tsv, header=T, sep='\t', quote="")
 mr_tsv = paste(output_dir_mr, paste('MR_', pheno1, '_2_', pheno2, '.tsv', sep=""), sep = '/')
 res_mr <- read.table(mr_tsv, header=T, sep='\t', quote="")
