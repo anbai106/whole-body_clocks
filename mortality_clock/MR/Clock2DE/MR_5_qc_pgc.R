@@ -1,0 +1,65 @@
+#!/usr/bin/env Rscript
+
+args = commandArgs(trailingOnly=TRUE)
+
+pheno1 <- args[1]
+pheno2 <- args[2]
+output_dir_qc <- args[3]
+output_dir_har <- args[4]
+output_dir_mr <- args[5]
+organ_long <- args[6]
+
+.libPaths('/gpfs/fs001/cbica/home/wenju/R/x86_64-pc-linux-gnu-library/4.3')
+
+library(TwoSampleMR)
+library(MRInstruments)
+library(stringr)
+library(dplyr)
+library(svglite)
+
+## output dir
+print(paste0("Exposure: ", pheno1))
+print(paste0("Outcome: ", pheno2))
+hamonized_tsv = paste(output_dir_har,  paste('harmonized_data_', organ_long, '_2_', pheno2, '.tsv', sep=""), sep = '/')
+hamonized_data <- read.table(hamonized_tsv, header=T, sep='\t', quote="")
+mr_tsv = paste(output_dir_mr, paste('MR_', pheno1, '_2_', pheno2, '.tsv', sep=""), sep = '/')
+res_mr <- read.table(mr_tsv, header=T, sep='\t', quote="")
+
+#### Sensitivity analyses
+# heterogeneity test
+res_heterogeneity <- mr_heterogeneity(hamonized_data)
+write.table(res_heterogeneity,file=paste(output_dir_qc, '/',  "SC_", pheno1, "_2_", pheno2, "_heterogeneity.tsv", sep=""),row.names=F,col.names=T,sep="\t",quote=F)
+
+# horizontal pleiotropy
+res_pleiotropy <- mr_pleiotropy_test(hamonized_data)
+write.table(res_pleiotropy,file=paste(output_dir_qc, '/',  "SC_", pheno1, "_2_", pheno2, "_horizontal_pleiotropy.tsv", sep=""),row.names=F,col.names=T,sep="\t",quote=F)
+
+# single SNP analyses
+res_single <- mr_singlesnp(hamonized_data)
+write.table(res_single,file=paste(output_dir_qc, '/',  "SC_", pheno1, "_2_", pheno2, "_single_snp.tsv", sep=""),row.names=F,col.names=T,sep="\t",quote=F)
+
+## LOO analysis
+loo <- mr_leaveoneout(hamonized_data)
+write.table(loo,file=paste(output_dir_qc, '/',  "SC_", pheno1, "_2_", pheno2, "_LOO.tsv", sep=""),row.names=F,col.names=T,sep="\t",quote=F)
+
+## forest plot
+svglite(paste(output_dir_qc, '/',  "SC_", pheno1, "_2_", pheno2, "_forest.svg", sep=""), width = 10, height = 10)
+mr_forest_plot(res_single)
+dev.off()
+
+## loo plot
+svglite(paste(output_dir_qc, '/',  "SC_", pheno1, "_2_", pheno2, "_loo.svg", sep=""), width = 10, height = 10)
+mr_leaveoneout_plot(loo)
+dev.off()
+
+## funnel plot
+svglite(paste(output_dir_qc, '/',  "SC_", pheno1, "_2_", pheno2, "_funnel.svg", sep=""), width = 10, height = 10)
+mr_funnel_plot(res_single)
+dev.off()
+
+## scatter plot
+svglite(paste(output_dir_qc, '/',  "SC_", pheno1, "_2_", pheno2, "_scatter.svg", sep=""), width = 10, height = 10)
+mr_scatter_plot(res_mr, hamonized_data)
+dev.off()
+
+print('Plots finished here...')

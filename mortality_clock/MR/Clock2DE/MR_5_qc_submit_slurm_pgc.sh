@@ -38,7 +38,7 @@ do
 
     if [ -n "$significant_pval" ]; then
       echo "Run 2SampleMR QC from ${organ_first} to ${pgc}..."
-      Rscript /cbica/home/wenju/Project/whole-body_clocks/mortality_clock/MR/Clock2DE/MR_5_qc.R ${organ_first} ${pgc} ${output_dir_qc} ${output_dir_har} ${output_dir_mr}
+      Rscript /cbica/home/wenju/Project/whole-body_clocks/mortality_clock/MR/Clock2DE/MR_5_qc.R ${organ_first} ${pgc} ${output_dir_qc} ${output_dir_har} ${output_dir_mr} ${organ}
     else
       echo "Not significant for ${organ_first}..."
     fi
