@@ -12,7 +12,7 @@ protein_list_long = df_protein_long.columns[2:].to_list()
 protein_set_long = set(protein_list_long)
 
 output_dir = '/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/mortality_clock/longitudinal/proteomics/data'
-organ_list = 'Reproductive_female', 'Pulmonary', 'Heart', 'Brain', 'Eye', 'Hepatic', 'Renal', 'Reproductive_male', 'Endocrine', 'Immune', 'Skin'
+organ_list = ['Reproductive_female', 'Pulmonary', 'Heart', 'Brain', 'Eye', 'Hepatic', 'Renal', 'Reproductive_male', 'Endocrine', 'Immune', 'Skin']
 
 for organ in organ_list:
     df_protein_bl = pd.read_csv(

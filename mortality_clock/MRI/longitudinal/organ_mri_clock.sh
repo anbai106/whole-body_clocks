@@ -6,6 +6,8 @@
 #SBATCH --output=/cbica/home/wenju/output/apply_mri_clock_instance3_%A_%a.out
 #SBATCH --error=/cbica/home/wenju/output/apply_mri_clock_instance3_%A_%a.err
 
+set -euo pipefail
+
 source activate survival_clock
 
 organs=(heart pancreas)
@@ -49,13 +51,21 @@ if [ ! -f "${input_tsv}" ]; then
   exit 1
 fi
 
-python "${script}" \
+pref="${organ}_mri_mortality_clock"
+
+echo "Removing stale output files before rerun..."
+rm -f "${outdir}/${pref}_apply_instance_3_0_predictions.tsv"
+rm -f "${outdir}/${pref}_apply_instance_3_0_summary.json"
+rm -f "${outdir}/${pref}_apply_longitudinal_instances_combined_predictions.tsv"
+rm -f "${outdir}/${pref}_apply_longitudinal_instances_combined_summary.json"
+
+python -u "${script}" \
   --organ "${organ}" \
   --model-joblib "${model_joblib}" \
   --input-tsv "3_0:${input_tsv}" \
   --covariate-csv /cbica/home/wenju/Reproducibile_paper/PRS_UKBB/prediction/data/UKBB_fullsample_covariate.csv \
   --death-xlsx /cbica/home/wenju/Dataset/UKBB_UMelbourne/Death_related_var_from_Ye.xlsx \
-  --id-match-csv /cbica/home/wenju/Dataset/UKBB_UMelbourne/UKB_UMelbourne_vs_Penn_match_key.csv \
+  --id-match-csv /cbica/home/wenju/Dataset/UKBB_UMelbourne_vs_Penn_match_key.csv \
   --admin-censor-date 2022-11-30 \
   --outdir "${outdir}" \
   --application-session-id ses-M3 \
@@ -65,6 +75,49 @@ python "${script}" \
   --risk-times 5,10,15 \
   --complete-case-organ-features \
   --include-features-in-output
+
+prediction_file="${outdir}/${pref}_apply_instance_3_0_predictions.tsv"
+
+echo "============================================================"
+echo "Checking required output columns"
+echo "Prediction file: ${prediction_file}"
+echo "============================================================"
+
+if [ ! -f "${prediction_file}" ]; then
+  echo "ERROR: prediction file was not generated: ${prediction_file}"
+  exit 1
+fi
+
+required_cols=(
+  "${organ}_mri_mortality_risk_score"
+  "${organ}_mri_mortality_clock_acceleration_z"
+  "${organ}_mri_mortality_clock_acceleration_years"
+  "${organ}_mri_mortality_clock_age_years"
+)
+
+for col in "${required_cols[@]}"; do
+  if ! head -n 1 "${prediction_file}" | tr '\t' '\n' | grep -Fxq "${col}"; then
+    echo "ERROR: required column missing: ${col}"
+    echo "Header columns containing ${organ}_mri_mortality:"
+    head -n 1 "${prediction_file}" | tr '\t' '\n' | grep "${organ}_mri_mortality" || true
+    exit 1
+  fi
+done
+
+bad_pattern="${organ}_mri_mortality_clock_acceleration_${organ}_mri_mortality_clock_acceleration"
+if head -n 1 "${prediction_file}" | grep -q "${bad_pattern}"; then
+  echo "ERROR: malformed duplicated acceleration column detected."
+  head -n 1 "${prediction_file}" | tr '\t' '\n' | grep "${organ}_mri_mortality_clock_acceleration" || true
+  exit 1
+fi
+
+echo "Verified required columns:"
+for col in "${required_cols[@]}"; do
+  echo "  ${col}"
+done
+
+echo "Header mortality-clock columns:"
+head -n 1 "${prediction_file}" | tr '\t' '\n' | grep "${organ}_mri_mortality" || true
 
 echo "============================================================"
 echo "Finished applying pretrained MRI mortality clock"

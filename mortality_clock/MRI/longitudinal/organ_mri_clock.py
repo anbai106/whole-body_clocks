@@ -15,13 +15,14 @@
 #     acceleration_years, and clock_age_years using the saved
 #     clock_transform_info from the training script
 #
-# Clean output style:
+# Clean output style, similar to pulmonary proteomics:
 #   participant_id
 #   application_instance
 #   application_source_file
 #   {organ}_mri_mortality_risk_score
 #   sample_date
 #   death_date
+#   age_at_baseline
 #   age_at_imaging
 #   sex
 #   bmi_at_imaging
@@ -60,17 +61,8 @@ import pandas as pd
 def parse_args():
     p = argparse.ArgumentParser()
 
-    p.add_argument(
-        "--organ",
-        required=True,
-        help="Organ name, e.g., heart or pancreas."
-    )
-
-    p.add_argument(
-        "--model-joblib",
-        required=True,
-        help="Path to pretrained *_mri_mortality_clock_model.joblib."
-    )
+    p.add_argument("--organ", required=True, help="Organ name, e.g., heart or pancreas.")
+    p.add_argument("--model-joblib", required=True, help="Path to pretrained *_mri_mortality_clock_model.joblib.")
 
     p.add_argument(
         "--input-tsv",
@@ -80,98 +72,51 @@ def parse_args():
             "Application TSV. Use either PATH or LABEL:PATH. "
             "Example: 3_0:/path/imaging_heart_3_0.tsv. "
             "Can be supplied multiple times."
-        )
+        ),
     )
 
     p.add_argument(
         "--covariate-csv",
         default="/cbica/home/wenju/Reproducibile_paper/PRS_UKBB/prediction/data/UKBB_fullsample_covariate.csv",
-        help="UKB covariate CSV with eid and instance-specific covariates."
+        help="UKB covariate CSV with eid and instance-specific covariates.",
     )
 
     p.add_argument(
         "--death-xlsx",
         default="/cbica/home/wenju/Dataset/UKBB_UMelbourne/Death_related_var_from_Ye.xlsx",
-        help="Death/assessment-date file."
+        help="Death/assessment-date file.",
     )
 
     p.add_argument(
         "--id-match-csv",
         default="/cbica/home/wenju/Dataset/UKBB_UMelbourne/UKB_UMelbourne_vs_Penn_match_key.csv",
-        help="ID mapping file from UMelbourne ID to Penn ID."
+        help="ID mapping file from UMelbourne ID to Penn ID.",
     )
 
-    p.add_argument(
-        "--admin-censor-date",
-        default="2022-11-30",
-        help="Administrative censor date for follow-up annotation."
-    )
-
-    p.add_argument(
-        "--outdir",
-        required=True,
-        help="Output directory."
-    )
-
-    p.add_argument(
-        "--application-session-id",
-        default="ses-M3",
-        help="If session_id exists, filter to this session. Use 'none' to disable."
-    )
-
-    p.add_argument(
-        "--imaging-instance",
-        default="3",
-        help="Target UKB imaging instance. Default: 3."
-    )
-
-    p.add_argument(
-        "--model-instance",
-        default="2",
-        help="Training/model UKB imaging instance. Default: 2."
-    )
-
-    p.add_argument(
-        "--feature-start-column",
-        default="diagnosis",
-        help=(
-            "If needed, all columns after this column are candidate MRI features. "
-            "The saved model bundle is still the primary source of required features."
-        )
-    )
-
-    p.add_argument(
-        "--risk-times",
-        default="5,10,15",
-        help="Comma-separated risk horizons in years. Default: 5,10,15."
-    )
+    p.add_argument("--admin-censor-date", default="2022-11-30")
+    p.add_argument("--outdir", required=True)
+    p.add_argument("--application-session-id", default="ses-M3", help="Use 'none' to disable session filtering.")
+    p.add_argument("--imaging-instance", default="3")
+    p.add_argument("--model-instance", default="2")
+    p.add_argument("--feature-start-column", default="diagnosis")
+    p.add_argument("--risk-times", default="5,10,15")
 
     p.add_argument(
         "--complete-case-organ-features",
         action="store_true",
-        help=(
-            "Drop participants missing any model-used organ MRI feature. "
-            "Recommended for instance-3 longitudinal application."
-        )
+        help="Drop participants missing any model-used organ MRI feature.",
     )
 
     p.add_argument(
         "--allow-missing-model-columns",
         action="store_true",
-        help=(
-            "If a saved model input column is missing from the application data, "
-            "create it as NA and let the saved preprocessor impute it. "
-            "Default is to error for missing model-used organ features."
-        )
+        help="Create missing saved model columns as NA and let the saved preprocessor impute them.",
     )
 
     p.add_argument(
         "--include-features-in-output",
         action="store_true",
-        help=(
-            "Include organ MRI feature columns in the prediction output TSV. "
-            "Recommended if you want the same style as pulmonary proteomics output."
-        )
+        help="Include organ MRI feature columns in the clean prediction output TSV.",
     )
 
     return p.parse_args()
@@ -205,18 +150,12 @@ def parse_risk_times(s):
 
 
 def parse_input_spec(spec):
-    """
-    Accept:
-      /path/file.tsv
-      3_0:/path/file.tsv
-    """
     spec = str(spec)
     if ":" in spec and not spec.startswith("/"):
         label, path = spec.split(":", 1)
         return label.strip(), path.strip()
     path = spec.strip()
-    label = Path(path).stem
-    return label, path
+    return Path(path).stem, path
 
 
 def expand_paths(path):
@@ -286,10 +225,7 @@ def load_application_tsv(input_tsv, organ, session_id):
             part["application_source_file"] = Path(path).name
             frames.append(part)
 
-            print(
-                f"Loaded {organ} application TSV: {path}; "
-                f"rows={part.shape[0]}, cols={part.shape[1]}"
-            )
+            print(f"Loaded {organ} application TSV: {path}; rows={part.shape[0]}, cols={part.shape[1]}")
 
     df = pd.concat(frames, axis=0, ignore_index=True, sort=False)
 
@@ -305,18 +241,11 @@ def load_application_tsv(input_tsv, organ, session_id):
     df = df.dropna(subset=["participant_id"]).copy()
     df["participant_id"] = df["participant_id"].astype(int)
 
-    sort_cols = ["participant_id"]
-    if "application_instance" in df.columns:
-        sort_cols.append("application_instance")
-
-    df = df.sort_values(sort_cols, kind="mergesort")
+    df = df.sort_values(["participant_id", "application_instance"], kind="mergesort")
 
     dup = int(df.duplicated(["participant_id", "application_instance"]).sum())
     if dup > 0:
-        warnings.warn(
-            f"Found {dup} duplicated participant_id/application_instance rows. "
-            "Keeping the first row."
-        )
+        warnings.warn(f"Found {dup} duplicated participant_id/application_instance rows. Keeping first.")
         df = df.drop_duplicates(["participant_id", "application_instance"], keep="first")
 
     print("Application dataset:")
@@ -361,7 +290,6 @@ def load_death_data(death_xlsx, id_match_csv, imaging_instance="3", admin_censor
     death_date_col = "40000-0.0"
 
     keep = ["participant_id"]
-
     for c in [baseline_date_col, model_imaging_date_col, target_imaging_date_col, death_date_col]:
         if c in d.columns:
             keep.append(c)
@@ -370,25 +298,10 @@ def load_death_data(death_xlsx, id_match_csv, imaging_instance="3", admin_censor
 
     d = d[keep].copy()
 
-    if baseline_date_col in d.columns:
-        d["baseline_date"] = pd.to_datetime(d[baseline_date_col], errors="coerce")
-    else:
-        d["baseline_date"] = pd.NaT
-
-    if model_imaging_date_col in d.columns:
-        d["model_imaging_date"] = pd.to_datetime(d[model_imaging_date_col], errors="coerce")
-    else:
-        d["model_imaging_date"] = pd.NaT
-
-    if target_imaging_date_col in d.columns:
-        d["imaging_date"] = pd.to_datetime(d[target_imaging_date_col], errors="coerce")
-    else:
-        d["imaging_date"] = pd.NaT
-
-    if death_date_col in d.columns:
-        d["death_date"] = pd.to_datetime(d[death_date_col], errors="coerce")
-    else:
-        d["death_date"] = pd.NaT
+    d["baseline_date"] = pd.to_datetime(d[baseline_date_col], errors="coerce") if baseline_date_col in d.columns else pd.NaT
+    d["model_imaging_date"] = pd.to_datetime(d[model_imaging_date_col], errors="coerce") if model_imaging_date_col in d.columns else pd.NaT
+    d["imaging_date"] = pd.to_datetime(d[target_imaging_date_col], errors="coerce") if target_imaging_date_col in d.columns else pd.NaT
+    d["death_date"] = pd.to_datetime(d[death_date_col], errors="coerce") if death_date_col in d.columns else pd.NaT
 
     d["admin_censor_date"] = pd.to_datetime(admin_censor_date)
 
@@ -457,29 +370,32 @@ def pick_first_existing(df, candidates):
 
 
 def add_application_covariates(df, imaging_instance="3", model_instance="2"):
-    """
-    Create the same covariate names expected by the training script:
-      age_at_imaging
-      sex
-      bmi_at_imaging
-      diastolic_bp_at_imaging
-      systolic_bp_at_imaging
-      uk_biobank_assessment_centre_f54_2_0
-
-    For instance-3 application, these are populated using instance-3 fields
-    when available. The assessment-centre variable keeps the model-expected
-    name f54_2_0 but is populated from f54_3_0 when available.
-    """
     df = df.copy()
 
-    # Age
-    age_candidates = [
-        f"age_when_attended_assessment_centre_f21003_{imaging_instance}_0",
-        f"age_when_attended_assessment_centre_f21003_{model_instance}_0",
-        "age_at_imaging",
-        "diagnosis",
-    ]
-    age_source = pick_first_existing(df, age_candidates)
+    # Baseline age, for clean output only
+    baseline_age_source = pick_first_existing(
+        df,
+        [
+            "age_when_attended_assessment_centre_f21003_0_0",
+            "age_at_baseline",
+            "age_at_recruitment_f21022_0_0",
+        ],
+    )
+    if baseline_age_source is not None:
+        df["age_at_baseline"] = as_numeric(df[baseline_age_source])
+    else:
+        df["age_at_baseline"] = np.nan
+
+    # Age at imaging/application instance
+    age_source = pick_first_existing(
+        df,
+        [
+            f"age_when_attended_assessment_centre_f21003_{imaging_instance}_0",
+            f"age_when_attended_assessment_centre_f21003_{model_instance}_0",
+            "age_at_imaging",
+            "diagnosis",
+        ],
+    )
 
     if age_source is None:
         raise ValueError(
@@ -491,7 +407,6 @@ def add_application_covariates(df, imaging_instance="3", model_instance="2"):
 
     # Sex
     sex_source = pick_first_existing(df, ["sex_f31_0_0", "sex", "Sex"])
-
     if sex_source is None:
         raise ValueError("Could not infer sex. Expected sex_f31_0_0, sex, or Sex.")
 
@@ -534,8 +449,7 @@ def add_application_covariates(df, imaging_instance="3", model_instance="2"):
         "systolic_bp_at_imaging",
     )
 
-    # Assessment centre.
-    # The trained model expects this exact model-instance name.
+    # Assessment centre: keep the model-expected name but populate from instance 3 if available
     model_center_name = f"uk_biobank_assessment_centre_f54_{model_instance}_0"
     center_source = pick_first_existing(
         df,
@@ -545,8 +459,11 @@ def add_application_covariates(df, imaging_instance="3", model_instance="2"):
             model_center_name,
         ],
     )
+
     if center_source is not None:
         df[model_center_name] = df[center_source].astype("object")
+    elif model_center_name not in df.columns:
+        df[model_center_name] = pd.NA
 
     return df
 
@@ -593,10 +510,6 @@ def numeric_fill_for_residualization(series, name):
 
 
 def categorical_match(series, category_value):
-    """
-    Robust one-hot reconstruction for saved residualization coefficients.
-    Handles both string categories and numeric categories such as 11027 vs 11027.0.
-    """
     s_obj = series.astype("object")
     s_str = s_obj.astype(str).str.strip()
     cat_str = str(category_value).strip()
@@ -614,11 +527,6 @@ def categorical_match(series, category_value):
 
 
 def parse_categorical_coef_name(term, categorical_covs):
-    """
-    term examples:
-      cat__sex_Male
-      cat__uk_biobank_assessment_centre_f54_2_0_11027.0
-    """
     if not term.startswith("cat__"):
         return None, None
 
@@ -643,7 +551,7 @@ def compute_clock_transforms_from_saved_info(df, risk, organ, clock_info):
     out[risk_col] = risk
 
     if not clock_info:
-        warnings.warn("clock_transform_info is missing from model bundle. Acceleration columns set to NA.")
+        warnings.warn("clock_transform_info is missing from model bundle. Clock columns set to NA.")
         out[z_col] = np.nan
         out[yrs_col] = np.nan
         out[age_col] = np.nan
@@ -671,7 +579,7 @@ def compute_clock_transforms_from_saved_info(df, risk, organ, clock_info):
         if term.startswith("num__"):
             cov = term[len("num__"):]
             if cov not in out.columns:
-                warnings.warn(f"Residualization numeric covariate missing in application data: {cov}. Using 0.")
+                warnings.warn(f"Residualization numeric covariate missing: {cov}. Using 0.")
                 vals = np.repeat(0.0, out.shape[0])
             else:
                 vals = numeric_fill_for_residualization(out[cov], cov).values.astype(float)
@@ -685,7 +593,7 @@ def compute_clock_transforms_from_saved_info(df, risk, organ, clock_info):
                 continue
 
             if cov not in out.columns:
-                warnings.warn(f"Residualization categorical covariate missing in application data: {cov}. Term set to 0.")
+                warnings.warn(f"Residualization categorical covariate missing: {cov}. Term set to 0.")
                 vals = np.repeat(0.0, out.shape[0])
             else:
                 vals = categorical_match(out[cov], category).values.astype(float)
@@ -721,10 +629,6 @@ def compute_clock_transforms_from_saved_info(df, risk, organ, clock_info):
         out[yrs_col] = np.nan
         out[age_col] = np.nan
 
-    # Keep these internally for optional QC, but they are not written to the clean output.
-    out[f"{organ}_mri_mortality_expected_risk_score_from_covariates"] = expected
-    out[f"{organ}_mri_mortality_residualized_risk_score"] = resid
-
     return out
 
 
@@ -747,6 +651,29 @@ def prepare_model_input_columns(df, numeric_cols_kept, categorical_cols_kept):
     return df, expected_cols
 
 
+def validate_clean_output_columns(pred_out, organ):
+    required = [
+        f"{organ}_mri_mortality_risk_score",
+        f"{organ}_mri_mortality_clock_acceleration_z",
+        f"{organ}_mri_mortality_clock_acceleration_years",
+        f"{organ}_mri_mortality_clock_age_years",
+    ]
+
+    missing = [c for c in required if c not in pred_out.columns]
+    if missing:
+        raise RuntimeError(f"Missing required output columns for {organ}: {missing}")
+
+    malformed = [
+        c for c in pred_out.columns
+        if c.count(f"{organ}_mri_mortality_clock_acceleration_") > 1
+    ]
+
+    if malformed:
+        raise RuntimeError(f"Malformed clock acceleration columns found for {organ}: {malformed}")
+
+    return True
+
+
 def apply_one_instance(
     df_app,
     bundle,
@@ -766,7 +693,6 @@ def apply_one_instance(
     organ_feature_cols_original = list(bundle.get("organ_feature_cols", []))
     clock_info = bundle.get("clock_transform_info", None)
 
-    # Organ features actually expected by saved raw input/preprocessor.
     model_used_organ_features = [
         c for c in organ_feature_cols_original
         if c in numeric_cols_kept
@@ -818,16 +744,14 @@ def apply_one_instance(
     df_model["n_model_mri_features_expected"] = len(model_used_organ_features)
     df_model["n_model_mri_features_missing_from_input"] = df_model[model_used_organ_features].isna().sum(axis=1)
     df_model["n_model_mri_features_present_in_input"] = (
-        df_model["n_model_mri_features_expected"] - df_model["n_model_mri_features_missing_from_input"]
+        df_model["n_model_mri_features_expected"]
+        - df_model["n_model_mri_features_missing_from_input"]
     )
 
     if complete_case_organ_features:
         before = df_model.shape[0]
         df_model = df_model.loc[df_model["n_model_mri_features_missing_from_input"] == 0].copy()
-        print(
-            "Complete-case organ-feature filter: "
-            f"{before} -> {df_model.shape[0]} participants"
-        )
+        print(f"Complete-case organ-feature filter: {before} -> {df_model.shape[0]} participants")
 
     if df_model.empty:
         raise ValueError("No participants remain after complete-case filtering.")
@@ -852,13 +776,8 @@ def apply_one_instance(
     yrs_col = f"{organ}_mri_mortality_clock_acceleration_years"
     age_col = f"{organ}_mri_mortality_clock_age_years"
 
-    # Match pulmonary-style sample_date.
-    if "imaging_date" in pred.columns:
-        pred["sample_date"] = pred["imaging_date"]
-    else:
-        pred["sample_date"] = pd.NaT
+    pred["sample_date"] = pred["imaging_date"] if "imaging_date" in pred.columns else pd.NaT
 
-    # Clean output ordering, modeled after pulmonary proteomics output.
     id_cols = [
         "participant_id",
         "application_instance",
@@ -866,6 +785,7 @@ def apply_one_instance(
         risk_col,
         "sample_date",
         "death_date",
+        "age_at_baseline",
         "age_at_imaging",
         "sex",
         "bmi_at_imaging",
@@ -875,7 +795,6 @@ def apply_one_instance(
     ]
 
     feature_cols = model_used_organ_features if include_features_in_output else []
-
     risk_cols = [f"risk_{t:g}y" for t in risk_times]
 
     clock_cols = [
@@ -895,15 +814,12 @@ def apply_one_instance(
         if c in pred.columns and c not in ordered_cols:
             ordered_cols.append(c)
 
-    # Do NOT append remaining columns.
-    # This keeps output clean and avoids raw covariate columns.
     pred_out = pred[ordered_cols].copy()
 
+    validate_clean_output_columns(pred_out, organ)
+
     instance_labels = sorted(pred_out["application_instance"].dropna().astype(str).unique().tolist())
-    if len(instance_labels) == 1:
-        instance_label = instance_labels[0]
-    else:
-        instance_label = "combined"
+    instance_label = instance_labels[0] if len(instance_labels) == 1 else "combined"
 
     out_pred = outdir / f"{pref}_apply_instance_{instance_label}_predictions.tsv"
     pred_out.to_csv(out_pred, sep="\t", index=False)
@@ -935,9 +851,11 @@ def apply_one_instance(
 
     print(f"Saved clean predictions: {out_pred}")
     print(f"Saved summary: {out_summary}")
-    print("Clean output columns:")
-    for c in ordered_cols:
-        print(f"  {c}")
+    print("Required clock columns verified:")
+    print(f"  {risk_col}")
+    print(f"  {z_col}")
+    print(f"  {yrs_col}")
+    print(f"  {age_col}")
 
     return pred_out, summary
 
@@ -1011,7 +929,6 @@ def main():
         include_features_in_output=args.include_features_in_output,
     )
 
-    # Save combined-style clean file for consistency with pulmonary application.
     combined_pred = outdir / f"{pref}_apply_longitudinal_instances_combined_predictions.tsv"
     pred.to_csv(combined_pred, sep="\t", index=False)
 
