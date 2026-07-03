@@ -1,42 +1,44 @@
 #!/bin/bash
 #SBATCH --partition=all
-#SBATCH --job-name=apply_pulmonary_proteomics_mortality_clock_longitudinal
+#SBATCH --job-name=organ_proteomics_clock
 #SBATCH --mem-per-cpu=24G
-#SBATCH --time=0-04:00:00
-#SBATCH --output=/cbica/home/wenju/output/apply_pulmonary_proteomics_mortality_clock_longitudinal_%A.out
-#SBATCH --error=/cbica/home/wenju/output/apply_pulmonary_proteomics_mortality_clock_longitudinal_%A.err
+#SBATCH --array=0-10
+#SBATCH --output=/cbica/home/wenju/output/organ_proteomics_mortality_clock_%A_%a.out
+#SBATCH --error=/cbica/home/wenju/output/organ_proteomics_mortality_clock_%A_%a.err
 
-set -euo pipefail
-
-module load python/anaconda/3
 source activate survival_clock
 
-outdir="Reproducibile_paper/WholeBodyClock/mortality_clock/longitudinal/proteomics/Pulmonary"
-mkdir -p "${outdir}"
-mkdir -p /cbica/home/wenju/output
+numbers=(Reproductive_female Pulmonary Heart Brain Eye Hepatic Renal Reproductive_male Endocrine Immune Skin)
+organ=${numbers[$SLURM_ARRAY_TASK_ID]}
 
-exec > "${outdir}/apply_pulmonary_proteomics_mortality_clock_longitudinal_${SLURM_JOB_ID}.out" \
-     2> "${outdir}/apply_pulmonary_proteomics_mortality_clock_longitudinal_${SLURM_JOB_ID}.err"
+outdir="/cbica/home/wenju/Reproducibile_paper/WholeBodyClock/${organ}_proteomics_mortality_clock"
+mkdir -p "${outdir}"
+
+# Redirect main job log dynamically into each organ-specific output folder
+exec > "${outdir}/${organ}_proteomics_mortality_clock_${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}.out" \
+     2> "${outdir}/${organ}_proteomics_mortality_clock_${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}.err"
 
 echo "============================================================"
-echo "Applying pre-trained Pulmonary proteomics mortality clock to longitudinal instances"
+echo "Starting organ Proteomics mortality clock"
+echo "Organ: ${organ}"
 echo "SLURM_JOB_ID: ${SLURM_JOB_ID}"
+echo "SLURM_ARRAY_TASK_ID: ${SLURM_ARRAY_TASK_ID}"
 echo "Output directory: ${outdir}"
 echo "Started at: $(date)"
 echo "============================================================"
 
 python /cbica/home/wenju/Project/whole-body_clocks/mortality_clock/Proteomics/organ_proteomics_clock.py \
-  --model-joblib /cbica/home/wenju/Reproducibile_paper/WholeBodyClock/Pulmonary_proteomics_mortality_clock/pulmonary_proteomics_mortality_clock_model.joblib \
-  --input-tsv 2_0:/cbica/home/wenju/Reproducibile_paper/WholeBodyClock/mortality_clock/longitudinal/proteomics/data/proteimics_Pulmonary_2_0.tsv \
-  --input-tsv 3_0:/cbica/home/wenju/Reproducibile_paper/WholeBodyClock/mortality_clock/longitudinal/proteomics/data/proteimics_Pulmonary_3_0.tsv \
-  --covariate-csv /cbica/home/wenju/Reproducibile_paper/PRS_UKBB/prediction/data/UKBB_fullsample_covariate.csv \
-  --assessment-xlsx /cbica/home/wenju/Dataset/UKBB_UMelbourne/Death_related_var_from_Ye.xlsx \
+  --death-xlsx /cbica/home/wenju/Dataset/UKBB_UMelbourne/Death_related_var_from_Ye.xlsx \
   --id-match-csv /cbica/home/wenju/Dataset/UKBB_UMelbourne/UKB_UMelbourne_vs_Penn_match_key.csv \
+  --organ-tsv "/cbica/home/wenju/Reproducibile_paper/UKBB_Proteomics/MLNI/data/${organ}/training/training_4589.tsv,/cbica/home/wenju/Reproducibile_paper/UKBB_Proteomics/MLNI/data/${organ}/PT/patient_pop.tsv,/cbica/home/wenju/Reproducibile_paper/UKBB_Proteomics/MLNI/data/${organ}/test/ind_test_500.tsv" \
+  --covariate-csv /cbica/home/wenju/Reproducibile_paper/PRS_UKBB/prediction/data/UKBB_fullsample_covariate.csv \
+  --admin-censor-date 2022-11-30 \
   --outdir "${outdir}" \
-  --organ pulmonary
+  --organ "${organ}"
 
 echo "============================================================"
-echo "Finished applying Pulmonary proteomics mortality clock"
+echo "Finished organ Proteomics mortality clock"
+echo "Organ: ${organ}"
 echo "Finished at: $(date)"
 echo "============================================================"
 
