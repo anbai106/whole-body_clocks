@@ -11,7 +11,7 @@ set -euo pipefail
 module load python/anaconda/3
 source activate survival_clock
 
-outdir="Reproducibile_paper/WholeBodyClock/mortality_clock/longitudinal/proteomics/Pulmonary"
+outdir="/cbica/home/wenju/Reproducibile_paper/WholeBodyClock/mortality_clock/longitudinal/proteomics/Pulmonary"
 mkdir -p "${outdir}"
 mkdir -p /cbica/home/wenju/output
 
