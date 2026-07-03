@@ -15,16 +15,29 @@
 #     acceleration_years, and clock_age_years using the saved
 #     clock_transform_info from the training script
 #
-# Input example:
-#   imaging_pancreas_3_0.tsv
+# Clean output style:
+#   participant_id
+#   application_instance
+#   application_source_file
+#   {organ}_mri_mortality_risk_score
+#   sample_date
+#   death_date
+#   age_at_imaging
+#   sex
+#   bmi_at_imaging
+#   diastolic_bp_at_imaging
+#   systolic_bp_at_imaging
+#   uk_biobank_assessment_centre_f54_2_0
+#   organ MRI features
+#   risk_5y, risk_10y, risk_15y
+#   {organ}_mri_mortality_clock_acceleration_z
+#   {organ}_mri_mortality_clock_acceleration_years
+#   {organ}_mri_mortality_clock_age_years
+#   n_model_mri_features_expected
+#   n_model_mri_features_present_in_input
+#   n_model_mri_features_missing_from_input
 #
-#   participant_id  session_id  diagnosis
-#   Pancreas_volume_21087-2.0
-#   Pancreas_PDFF_(fat_fraction)_21090-2.0
-#   Pancreas_iron_21091-2.0
-#
-# The feature columns keep the model-expected instance-2 names,
-# but contain instance-3 values.
+# No extra raw covariate columns are saved.
 # ============================================================
 
 import argparse
@@ -155,7 +168,10 @@ def parse_args():
     p.add_argument(
         "--include-features-in-output",
         action="store_true",
-        help="Include organ MRI feature columns in the prediction output TSV."
+        help=(
+            "Include organ MRI feature columns in the prediction output TSV. "
+            "Recommended if you want the same style as pulmonary proteomics output."
+        )
     )
 
     return p.parse_args()
@@ -270,7 +286,10 @@ def load_application_tsv(input_tsv, organ, session_id):
             part["application_source_file"] = Path(path).name
             frames.append(part)
 
-            print(f"Loaded {organ} application TSV: {path}; rows={part.shape[0]}, cols={part.shape[1]}")
+            print(
+                f"Loaded {organ} application TSV: {path}; "
+                f"rows={part.shape[0]}, cols={part.shape[1]}"
+            )
 
     df = pd.concat(frames, axis=0, ignore_index=True, sort=False)
 
@@ -334,7 +353,6 @@ def load_death_data(death_xlsx, id_match_csv, imaging_instance="3", admin_censor
         return None
 
     m = m.rename(columns={"id": "participant_id_umel", "id_upenn": "participant_id"})
-
     d = m.merge(d, on="participant_id_umel", how="inner")
 
     baseline_date_col = "53-0.0"
@@ -517,7 +535,7 @@ def add_application_covariates(df, imaging_instance="3", model_instance="2"):
     )
 
     # Assessment centre.
-    # The trained model likely expects this exact model-instance name.
+    # The trained model expects this exact model-instance name.
     model_center_name = f"uk_biobank_assessment_centre_f54_{model_instance}_0"
     center_source = pick_first_existing(
         df,
@@ -562,6 +580,7 @@ def predict_absolute_risk(model, X, times_years):
 
 def numeric_fill_for_residualization(series, name):
     x = as_numeric(series)
+
     if x.isna().all():
         warnings.warn(
             f"Residualization numeric covariate {name} is all missing. "
@@ -576,7 +595,6 @@ def numeric_fill_for_residualization(series, name):
 def categorical_match(series, category_value):
     """
     Robust one-hot reconstruction for saved residualization coefficients.
-
     Handles both string categories and numeric categories such as 11027 vs 11027.0.
     """
     s_obj = series.astype("object")
@@ -597,7 +615,7 @@ def categorical_match(series, category_value):
 
 def parse_categorical_coef_name(term, categorical_covs):
     """
-    term example:
+    term examples:
       cat__sex_Male
       cat__uk_biobank_assessment_centre_f54_2_0_11027.0
     """
@@ -640,10 +658,10 @@ def compute_clock_transforms_from_saved_info(df, risk, organ, clock_info):
 
     if not numeric_covs and not categorical_covs:
         for c in covariates:
-            if c == "sex" or not pd.api.types.is_numeric_dtype(out[c]) if c in out.columns else True:
-                categorical_covs.append(c)
-            else:
+            if c in out.columns and c != "sex" and pd.api.types.is_numeric_dtype(out[c]):
                 numeric_covs.append(c)
+            else:
+                categorical_covs.append(c)
 
     expected = np.repeat(intercept, out.shape[0]).astype(float)
 
@@ -661,6 +679,7 @@ def compute_clock_transforms_from_saved_info(df, risk, organ, clock_info):
 
         elif term.startswith("cat__"):
             cov, category = parse_categorical_coef_name(term, categorical_covs)
+
             if cov is None or category is None:
                 warnings.warn(f"Could not parse categorical residualization term: {term}. Ignoring.")
                 continue
@@ -670,6 +689,7 @@ def compute_clock_transforms_from_saved_info(df, risk, organ, clock_info):
                 vals = np.repeat(0.0, out.shape[0])
             else:
                 vals = categorical_match(out[cov], category).values.astype(float)
+
             expected += beta * vals
 
         else:
@@ -701,6 +721,7 @@ def compute_clock_transforms_from_saved_info(df, risk, organ, clock_info):
         out[yrs_col] = np.nan
         out[age_col] = np.nan
 
+    # Keep these internally for optional QC, but they are not written to the clean output.
     out[f"{organ}_mri_mortality_expected_risk_score_from_covariates"] = expected
     out[f"{organ}_mri_mortality_residualized_risk_score"] = resid
 
@@ -734,7 +755,7 @@ def apply_one_instance(
     risk_times,
     complete_case_organ_features=False,
     allow_missing_model_columns=False,
-    include_features_in_output=False,
+    include_features_in_output=True,
 ):
     pref = output_prefix(organ)
 
@@ -745,15 +766,13 @@ def apply_one_instance(
     organ_feature_cols_original = list(bundle.get("organ_feature_cols", []))
     clock_info = bundle.get("clock_transform_info", None)
 
-    # These are the organ features actually expected by the saved raw input/preprocessor.
+    # Organ features actually expected by saved raw input/preprocessor.
     model_used_organ_features = [
         c for c in organ_feature_cols_original
         if c in numeric_cols_kept
     ]
 
     if not model_used_organ_features:
-        # Fallback: if organ_feature_cols was not saved correctly, infer from numeric kept columns
-        # by excluding common covariates.
         cov_like = {
             "age_at_imaging",
             "bmi_at_imaging",
@@ -796,14 +815,15 @@ def apply_one_instance(
 
     n_before = df_model.shape[0]
 
-    df_model["n_missing_model_used_organ_features"] = df_model[model_used_organ_features].isna().sum(axis=1)
-    df_model["n_observed_model_used_organ_features"] = (
-        len(model_used_organ_features) - df_model["n_missing_model_used_organ_features"]
+    df_model["n_model_mri_features_expected"] = len(model_used_organ_features)
+    df_model["n_model_mri_features_missing_from_input"] = df_model[model_used_organ_features].isna().sum(axis=1)
+    df_model["n_model_mri_features_present_in_input"] = (
+        df_model["n_model_mri_features_expected"] - df_model["n_model_mri_features_missing_from_input"]
     )
 
     if complete_case_organ_features:
         before = df_model.shape[0]
-        df_model = df_model.loc[df_model["n_missing_model_used_organ_features"] == 0].copy()
+        df_model = df_model.loc[df_model["n_model_mri_features_missing_from_input"] == 0].copy()
         print(
             "Complete-case organ-feature filter: "
             f"{before} -> {df_model.shape[0]} participants"
@@ -832,29 +852,29 @@ def apply_one_instance(
     yrs_col = f"{organ}_mri_mortality_clock_acceleration_years"
     age_col = f"{organ}_mri_mortality_clock_age_years"
 
-    # Friendly sample-date column
+    # Match pulmonary-style sample_date.
     if "imaging_date" in pred.columns:
         pred["sample_date"] = pred["imaging_date"]
+    else:
+        pred["sample_date"] = pd.NaT
 
-    base_cols = [
+    # Clean output ordering, modeled after pulmonary proteomics output.
+    id_cols = [
         "participant_id",
         "application_instance",
         "application_source_file",
+        risk_col,
         "sample_date",
-        "imaging_date",
         "death_date",
-        "admin_censor_date",
-        "end_date",
-        "time_years",
-        "event",
         "age_at_imaging",
         "sex",
         "bmi_at_imaging",
         "diastolic_bp_at_imaging",
         "systolic_bp_at_imaging",
         "uk_biobank_assessment_centre_f54_2_0",
-        risk_col,
     ]
+
+    feature_cols = model_used_organ_features if include_features_in_output else []
 
     risk_cols = [f"risk_{t:g}y" for t in risk_times]
 
@@ -862,30 +882,22 @@ def apply_one_instance(
         z_col,
         yrs_col,
         age_col,
-        f"{organ}_mri_mortality_expected_risk_score_from_covariates",
-        f"{organ}_mri_mortality_residualized_risk_score",
     ]
 
     qc_cols = [
-        "n_observed_model_used_organ_features",
-        "n_missing_model_used_organ_features",
+        "n_model_mri_features_expected",
+        "n_model_mri_features_present_in_input",
+        "n_model_mri_features_missing_from_input",
     ]
 
-    feature_cols = model_used_organ_features if include_features_in_output else []
-
     ordered_cols = []
-    for c in base_cols + risk_cols + clock_cols + qc_cols + feature_cols:
+    for c in id_cols + feature_cols + risk_cols + clock_cols + qc_cols:
         if c in pred.columns and c not in ordered_cols:
             ordered_cols.append(c)
 
-    remaining_cols = [
-        c for c in pred.columns
-        if c not in ordered_cols
-        and c not in numeric_cols_kept
-        and c not in categorical_cols_kept
-    ]
-
-    pred_out = pred[ordered_cols + remaining_cols].copy()
+    # Do NOT append remaining columns.
+    # This keeps output clean and avoids raw covariate columns.
+    pred_out = pred[ordered_cols].copy()
 
     instance_labels = sorted(pred_out["application_instance"].dropna().astype(str).unique().tolist())
     if len(instance_labels) == 1:
@@ -905,22 +917,27 @@ def apply_one_instance(
         "n_numeric_cols_kept": int(len(numeric_cols_kept)),
         "n_categorical_cols_kept": int(len(categorical_cols_kept)),
         "n_original_organ_features_in_bundle": int(len(organ_feature_cols_original)),
-        "n_model_used_organ_features": int(len(model_used_organ_features)),
-        "n_model_used_organ_features_present_in_application_tsv": int(len(present_organ_features)),
-        "n_model_used_organ_features_missing_from_application_tsv": int(len(missing_organ_features)),
+        "n_model_mri_features_expected": int(len(model_used_organ_features)),
+        "n_model_mri_features_present_in_application_tsv": int(len(present_organ_features)),
+        "n_model_mri_features_missing_from_application_tsv": int(len(missing_organ_features)),
         "missing_model_used_organ_features": missing_organ_features,
         "complete_case_organ_features": bool(complete_case_organ_features),
         "allow_missing_model_columns": bool(allow_missing_model_columns),
+        "include_features_in_output": bool(include_features_in_output),
         "risk_times_years": risk_times,
         "prediction_file": str(out_pred),
+        "output_columns": ordered_cols,
     }
 
     out_summary = outdir / f"{pref}_apply_instance_{instance_label}_summary.json"
     with open(out_summary, "w") as f:
         json.dump(summary, f, indent=2)
 
-    print(f"Saved predictions: {out_pred}")
+    print(f"Saved clean predictions: {out_pred}")
     print(f"Saved summary: {out_summary}")
+    print("Clean output columns:")
+    for c in ordered_cols:
+        print(f"  {c}")
 
     return pred_out, summary
 
@@ -994,7 +1011,7 @@ def main():
         include_features_in_output=args.include_features_in_output,
     )
 
-    # Save combined-style files for consistency with the pulmonary application.
+    # Save combined-style clean file for consistency with pulmonary application.
     combined_pred = outdir / f"{pref}_apply_longitudinal_instances_combined_predictions.tsv"
     pred.to_csv(combined_pred, sep="\t", index=False)
 
@@ -1004,7 +1021,7 @@ def main():
 
     print("============================================================")
     print("Done.")
-    print(f"Combined prediction file: {combined_pred}")
+    print(f"Combined clean prediction file: {combined_pred}")
     print(f"Combined summary file: {combined_summary}")
     print("============================================================")
 
