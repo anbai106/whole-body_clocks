@@ -15,7 +15,7 @@
 #     acceleration_years, and clock_age_years using the saved
 #     clock_transform_info from the training script
 #
-# Clean output style, similar to pulmonary proteomics:
+# Final clean output:
 #   participant_id
 #   application_instance
 #   application_source_file
@@ -29,8 +29,9 @@
 #   diastolic_bp_at_imaging
 #   systolic_bp_at_imaging
 #   uk_biobank_assessment_centre_f54_2_0
-#   organ MRI features
-#   risk_5y, risk_10y, risk_15y
+#   risk_5y
+#   risk_10y
+#   risk_15y
 #   {organ}_mri_mortality_clock_acceleration_z
 #   {organ}_mri_mortality_clock_acceleration_years
 #   {organ}_mri_mortality_clock_age_years
@@ -38,7 +39,9 @@
 #   n_model_mri_features_present_in_input
 #   n_model_mri_features_missing_from_input
 #
-# No extra raw covariate columns are saved.
+# IMPORTANT:
+#   Original MRI features are used for model prediction but are NOT
+#   written to the final prediction file.
 # ============================================================
 
 import argparse
@@ -113,10 +116,12 @@ def parse_args():
         help="Create missing saved model columns as NA and let the saved preprocessor impute them.",
     )
 
+    # Kept only for backward compatibility with old Bash commands.
+    # This script intentionally ignores it and always writes clean output.
     p.add_argument(
         "--include-features-in-output",
         action="store_true",
-        help="Include organ MRI feature columns in the clean prediction output TSV.",
+        help="Deprecated and ignored. Final output never includes original MRI features.",
     )
 
     return p.parse_args()
@@ -200,6 +205,13 @@ def mean_existing_numeric_columns(df, cols, out_col):
 
     df[out_col] = df[present].mean(axis=1, skipna=True)
     return df
+
+
+def pick_first_existing(df, candidates):
+    for c in candidates:
+        if c in df.columns:
+            return c
+    return None
 
 
 # -----------------------------
@@ -362,17 +374,9 @@ def load_covariates(path):
     return cov
 
 
-def pick_first_existing(df, candidates):
-    for c in candidates:
-        if c in df.columns:
-            return c
-    return None
-
-
 def add_application_covariates(df, imaging_instance="3", model_instance="2"):
     df = df.copy()
 
-    # Baseline age, for clean output only
     baseline_age_source = pick_first_existing(
         df,
         [
@@ -386,7 +390,6 @@ def add_application_covariates(df, imaging_instance="3", model_instance="2"):
     else:
         df["age_at_baseline"] = np.nan
 
-    # Age at imaging/application instance
     age_source = pick_first_existing(
         df,
         [
@@ -405,14 +408,11 @@ def add_application_covariates(df, imaging_instance="3", model_instance="2"):
 
     df["age_at_imaging"] = as_numeric(df[age_source])
 
-    # Sex
     sex_source = pick_first_existing(df, ["sex_f31_0_0", "sex", "Sex"])
     if sex_source is None:
         raise ValueError("Could not infer sex. Expected sex_f31_0_0, sex, or Sex.")
-
     df["sex"] = normalize_sex(df[sex_source])
 
-    # BMI
     bmi_source = pick_first_existing(
         df,
         [
@@ -423,8 +423,9 @@ def add_application_covariates(df, imaging_instance="3", model_instance="2"):
     )
     if bmi_source is not None:
         df["bmi_at_imaging"] = as_numeric(df[bmi_source])
+    elif "bmi_at_imaging" not in df.columns:
+        df["bmi_at_imaging"] = np.nan
 
-    # Blood pressure
     df = mean_existing_numeric_columns(
         df,
         [
@@ -436,6 +437,9 @@ def add_application_covariates(df, imaging_instance="3", model_instance="2"):
         ],
         "diastolic_bp_at_imaging",
     )
+
+    if "diastolic_bp_at_imaging" not in df.columns:
+        df["diastolic_bp_at_imaging"] = np.nan
 
     df = mean_existing_numeric_columns(
         df,
@@ -449,7 +453,9 @@ def add_application_covariates(df, imaging_instance="3", model_instance="2"):
         "systolic_bp_at_imaging",
     )
 
-    # Assessment centre: keep the model-expected name but populate from instance 3 if available
+    if "systolic_bp_at_imaging" not in df.columns:
+        df["systolic_bp_at_imaging"] = np.nan
+
     model_center_name = f"uk_biobank_assessment_centre_f54_{model_instance}_0"
     center_source = pick_first_existing(
         df,
@@ -651,7 +657,7 @@ def prepare_model_input_columns(df, numeric_cols_kept, categorical_cols_kept):
     return df, expected_cols
 
 
-def validate_clean_output_columns(pred_out, organ):
+def validate_clean_output_columns(pred_out, organ, model_used_organ_features):
     required = [
         f"{organ}_mri_mortality_risk_score",
         f"{organ}_mri_mortality_clock_acceleration_z",
@@ -671,6 +677,13 @@ def validate_clean_output_columns(pred_out, organ):
     if malformed:
         raise RuntimeError(f"Malformed clock acceleration columns found for {organ}: {malformed}")
 
+    leaked_features = [c for c in model_used_organ_features if c in pred_out.columns]
+    if leaked_features:
+        raise RuntimeError(
+            f"Original MRI feature columns were accidentally written to final output for {organ}. "
+            f"Examples: {leaked_features[:10]}"
+        )
+
     return True
 
 
@@ -682,7 +695,6 @@ def apply_one_instance(
     risk_times,
     complete_case_organ_features=False,
     allow_missing_model_columns=False,
-    include_features_in_output=True,
 ):
     pref = output_prefix(organ)
 
@@ -709,6 +721,9 @@ def apply_one_instance(
             c for c in numeric_cols_kept
             if c not in cov_like
         ]
+
+    if not model_used_organ_features:
+        raise RuntimeError(f"No model-used organ MRI features could be identified for {organ}.")
 
     present_organ_features = [c for c in model_used_organ_features if c in df_app.columns]
     missing_organ_features = [c for c in model_used_organ_features if c not in df_app.columns]
@@ -794,7 +809,6 @@ def apply_one_instance(
         "uk_biobank_assessment_centre_f54_2_0",
     ]
 
-    feature_cols = model_used_organ_features if include_features_in_output else []
     risk_cols = [f"risk_{t:g}y" for t in risk_times]
 
     clock_cols = [
@@ -810,13 +824,13 @@ def apply_one_instance(
     ]
 
     ordered_cols = []
-    for c in id_cols + feature_cols + risk_cols + clock_cols + qc_cols:
+    for c in id_cols + risk_cols + clock_cols + qc_cols:
         if c in pred.columns and c not in ordered_cols:
             ordered_cols.append(c)
 
     pred_out = pred[ordered_cols].copy()
 
-    validate_clean_output_columns(pred_out, organ)
+    validate_clean_output_columns(pred_out, organ, model_used_organ_features)
 
     instance_labels = sorted(pred_out["application_instance"].dropna().astype(str).unique().tolist())
     instance_label = instance_labels[0] if len(instance_labels) == 1 else "combined"
@@ -839,7 +853,7 @@ def apply_one_instance(
         "missing_model_used_organ_features": missing_organ_features,
         "complete_case_organ_features": bool(complete_case_organ_features),
         "allow_missing_model_columns": bool(allow_missing_model_columns),
-        "include_features_in_output": bool(include_features_in_output),
+        "include_features_in_output": False,
         "risk_times_years": risk_times,
         "prediction_file": str(out_pred),
         "output_columns": ordered_cols,
@@ -856,6 +870,7 @@ def apply_one_instance(
     print(f"  {z_col}")
     print(f"  {yrs_col}")
     print(f"  {age_col}")
+    print("Original MRI features were not written to final prediction file.")
 
     return pred_out, summary
 
@@ -866,6 +881,12 @@ def apply_one_instance(
 
 def main():
     args = parse_args()
+
+    if args.include_features_in_output:
+        warnings.warn(
+            "--include-features-in-output was provided, but this revised script ignores it. "
+            "Final prediction files will not include original MRI feature columns."
+        )
 
     organ = clean_name(args.organ)
     pref = output_prefix(organ)
@@ -926,7 +947,6 @@ def main():
         risk_times=risk_times,
         complete_case_organ_features=args.complete_case_organ_features,
         allow_missing_model_columns=args.allow_missing_model_columns,
-        include_features_in_output=args.include_features_in_output,
     )
 
     combined_pred = outdir / f"{pref}_apply_longitudinal_instances_combined_predictions.tsv"

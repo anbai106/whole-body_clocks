@@ -65,7 +65,7 @@ python -u "${script}" \
   --input-tsv "3_0:${input_tsv}" \
   --covariate-csv /cbica/home/wenju/Reproducibile_paper/PRS_UKBB/prediction/data/UKBB_fullsample_covariate.csv \
   --death-xlsx /cbica/home/wenju/Dataset/UKBB_UMelbourne/Death_related_var_from_Ye.xlsx \
-  --id-match-csv /cbica/home/wenju/Dataset/UKBB_UMelbourne_vs_Penn_match_key.csv \
+  --id-match-csv /cbica/home/wenju/Dataset/UKBB_UMelbourne/UKB_UMelbourne_vs_Penn_match_key.csv \
   --admin-censor-date 2022-11-30 \
   --outdir "${outdir}" \
   --application-session-id ses-M3 \
@@ -73,13 +73,12 @@ python -u "${script}" \
   --model-instance 2 \
   --feature-start-column diagnosis \
   --risk-times 5,10,15 \
-  --complete-case-organ-features \
-  --include-features-in-output
+  --complete-case-organ-features
 
 prediction_file="${outdir}/${pref}_apply_instance_3_0_predictions.tsv"
 
 echo "============================================================"
-echo "Checking required output columns"
+echo "Checking final clean output"
 echo "Prediction file: ${prediction_file}"
 echo "============================================================"
 
@@ -93,6 +92,9 @@ required_cols=(
   "${organ}_mri_mortality_clock_acceleration_z"
   "${organ}_mri_mortality_clock_acceleration_years"
   "${organ}_mri_mortality_clock_age_years"
+  "n_model_mri_features_expected"
+  "n_model_mri_features_present_in_input"
+  "n_model_mri_features_missing_from_input"
 )
 
 for col in "${required_cols[@]}"; do
@@ -111,13 +113,39 @@ if head -n 1 "${prediction_file}" | grep -q "${bad_pattern}"; then
   exit 1
 fi
 
+echo "Checking that original MRI feature columns are NOT included..."
+
+if [ "${organ}" = "heart" ]; then
+  if head -n 1 "${prediction_file}" | tr '\t' '\n' | grep -E "^(lv_|rv_|la_|ra_|ascending_aorta_|descending_aorta_)"; then
+    echo "ERROR: heart MRI feature columns are still present in final prediction file."
+    exit 1
+  fi
+fi
+
+if [ "${organ}" = "pancreas" ]; then
+  if head -n 1 "${prediction_file}" | tr '\t' '\n' | grep -E "^Pancreas_"; then
+    echo "ERROR: pancreas MRI feature columns are still present in final prediction file."
+    exit 1
+  fi
+fi
+
+if head -n 1 "${prediction_file}" | tr '\t' '\n' | grep -Fxq "session_id"; then
+  echo "ERROR: session_id should not be in final clean prediction file."
+  exit 1
+fi
+
+if head -n 1 "${prediction_file}" | tr '\t' '\n' | grep -Fxq "diagnosis"; then
+  echo "ERROR: diagnosis should not be in final clean prediction file."
+  exit 1
+fi
+
 echo "Verified required columns:"
 for col in "${required_cols[@]}"; do
   echo "  ${col}"
 done
 
-echo "Header mortality-clock columns:"
-head -n 1 "${prediction_file}" | tr '\t' '\n' | grep "${organ}_mri_mortality" || true
+echo "Final clean header:"
+head -n 1 "${prediction_file}" | tr '\t' '\n'
 
 echo "============================================================"
 echo "Finished applying pretrained MRI mortality clock"
