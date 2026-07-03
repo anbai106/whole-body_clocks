@@ -62,6 +62,18 @@ def parse_args():
     p.add_argument("--max-feature-missing", type=float, default=0.20)
     p.add_argument("--l1-ratios", default="0.1,0.25,0.5,0.75,1.0")
     p.add_argument("--n-alphas", type=int, default=100)
+    p.add_argument(
+        "--alpha-min-ratio",
+        type=float,
+        default=0.01,
+        help="Minimum alpha ratio for Coxnet path. Increase to 0.05 or 0.10 if Coxnet has numerical overflow.",
+    )
+    p.add_argument(
+        "--covariate-penalty-factor",
+        type=float,
+        default=0.05,
+        help="Penalty factor for non-organ covariates. Use a small nonzero value to avoid Coxnet overflow.",
+    )
     p.add_argument("--min-followup-days", type=int, default=1)
     p.add_argument("--n-bootstrap-incremental", type=int, default=1000)
     return p.parse_args()
@@ -393,31 +405,127 @@ def compute_cindex(y, risk):
     return float(concordance_index_censored(y["event"], y["time"], np.asarray(risk).reshape(-1))[0])
 
 
-def fit_and_select_coxnet(X_train, y_train, X_val, y_val, feature_names, organ_feature_cols, organ, l1_ratios, n_alphas):
+def fit_and_select_coxnet(
+    X_train,
+    y_train,
+    X_val,
+    y_val,
+    feature_names,
+    organ_feature_cols,
+    organ,
+    l1_ratios,
+    n_alphas,
+    alpha_min_ratio=0.01,
+    covariate_penalty_factor=0.05,
+):
+    """
+    Tune l1_ratio and alpha using validation C-index.
+
+    Stability change for MI and other strong endpoints:
+    non-organ covariates are lightly penalized instead of completely unpenalized.
+    This prevents Coxnet numerical overflow when covariates or categorical levels
+    strongly separate incident events.
+    """
     penalty_factor = np.ones(len(feature_names), dtype=float)
     is_organ = organ_feature_mask(feature_names, organ_feature_cols)
-    penalty_factor[~is_organ] = 0.0
-    best = {"cindex": -np.inf, "l1_ratio": None, "alpha": None, "coef": None, "used_penalty_factor": True}
+
+    # Organ proteomics features remain fully penalized.
+    penalty_factor[is_organ] = 1.0
+
+    # Retained non-organ covariates are favored, but not completely unpenalized.
+    # A small nonzero penalty prevents unstable/infinite Cox coefficients.
+    penalty_factor[~is_organ] = float(covariate_penalty_factor)
+
+    best = {
+        "cindex": -np.inf,
+        "l1_ratio": None,
+        "alpha": None,
+        "coef": None,
+        "used_penalty_factor": True,
+        "covariate_penalty_factor": float(covariate_penalty_factor),
+        "alpha_min_ratio": float(alpha_min_ratio),
+    }
+
+    # If the initial path still overflows, automatically try more conservative paths.
+    alpha_min_ratio_candidates = list(dict.fromkeys([
+        float(alpha_min_ratio),
+        0.02,
+        0.05,
+        0.10,
+    ]))
+
     for l1_ratio in l1_ratios:
-        print(f"Fitting Coxnet path for l1_ratio={l1_ratio}")
-        try:
-            model = CoxnetSurvivalAnalysis(l1_ratio=l1_ratio, n_alphas=n_alphas, alpha_min_ratio="auto", penalty_factor=penalty_factor, fit_baseline_model=False, max_iter=100000)
-        except TypeError:
-            warnings.warn("Installed scikit-survival does not support penalty_factor. Covariates will be penalized.")
-            model = CoxnetSurvivalAnalysis(l1_ratio=l1_ratio, n_alphas=n_alphas, alpha_min_ratio="auto", fit_baseline_model=False, max_iter=100000)
-            best["used_penalty_factor"] = False
-        model.fit(X_train, y_train)
-        coefs = model.coef_
-        if coefs.ndim == 1:
-            coefs = coefs[:, None]
-        for j, alpha in enumerate(model.alphas_):
-            risk_val = np.dot(X_val, coefs[:, j])
-            cindex = compute_cindex(y_val, risk_val)
-            if np.isfinite(cindex) and cindex > best["cindex"]:
-                best.update({"cindex": float(cindex), "l1_ratio": float(l1_ratio), "alpha": float(alpha), "coef": coefs[:, j].copy()})
-        print(f"  best so far: C-index={best['cindex']:.4f}, l1_ratio={best['l1_ratio']}, alpha={best['alpha']}")
+        for amr in alpha_min_ratio_candidates:
+            print(f"Fitting Coxnet path for l1_ratio={l1_ratio}, alpha_min_ratio={amr}")
+
+            try:
+                model = CoxnetSurvivalAnalysis(
+                    l1_ratio=l1_ratio,
+                    n_alphas=n_alphas,
+                    alpha_min_ratio=amr,
+                    penalty_factor=penalty_factor,
+                    fit_baseline_model=False,
+                    max_iter=100000,
+                )
+            except TypeError:
+                warnings.warn(
+                    "Installed scikit-survival does not support penalty_factor. "
+                    "Covariates will be penalized together with organ features."
+                )
+                model = CoxnetSurvivalAnalysis(
+                    l1_ratio=l1_ratio,
+                    n_alphas=n_alphas,
+                    alpha_min_ratio=amr,
+                    fit_baseline_model=False,
+                    max_iter=100000,
+                )
+                best["used_penalty_factor"] = False
+
+            try:
+                model.fit(X_train, y_train)
+            except ArithmeticError as exc:
+                warnings.warn(
+                    f"Coxnet numerical overflow for l1_ratio={l1_ratio}, "
+                    f"alpha_min_ratio={amr}: {exc}. Trying a more conservative path."
+                )
+                continue
+            except Exception as exc:
+                warnings.warn(
+                    f"Coxnet failed for l1_ratio={l1_ratio}, "
+                    f"alpha_min_ratio={amr}: {exc}. Trying next setting."
+                )
+                continue
+
+            coefs = model.coef_
+            if coefs.ndim == 1:
+                coefs = coefs[:, None]
+
+            for j, alpha in enumerate(model.alphas_):
+                risk_val = np.dot(X_val, coefs[:, j])
+                cindex = compute_cindex(y_val, risk_val)
+
+                if np.isfinite(cindex) and cindex > best["cindex"]:
+                    best.update({
+                        "cindex": float(cindex),
+                        "l1_ratio": float(l1_ratio),
+                        "alpha": float(alpha),
+                        "coef": coefs[:, j].copy(),
+                        "alpha_min_ratio": float(amr),
+                    })
+
+            print(
+                f"  best so far: C-index={best['cindex']:.4f}, "
+                f"l1_ratio={best['l1_ratio']}, alpha={best['alpha']}, "
+                f"alpha_min_ratio={best['alpha_min_ratio']}"
+            )
+
     if best["alpha"] is None:
-        raise RuntimeError("Failed to select a Coxnet model.")
+        raise RuntimeError(
+            "Failed to select a Coxnet model after trying multiple alpha_min_ratio values. "
+            "Consider increasing --covariate-penalty-factor to 0.10, removing rare categorical covariates, "
+            "or using fewer/lower-dimensional proteomics features."
+        )
+
     return best, penalty_factor
 
 
@@ -697,7 +805,19 @@ def main():
     y_trainval = Surv.from_arrays(event=df_trainval["event"].astype(bool).values, time=df_trainval["time_years"].astype(float).values)
 
     print("Tuning elastic-net Cox model...")
-    best, penalty_factor = fit_and_select_coxnet(X_train, y_train, X_val, y_val, feature_names, organ_feature_cols, organ, l1_ratios, args.n_alphas)
+    best, penalty_factor = fit_and_select_coxnet(
+        X_train=X_train,
+        y_train=y_train,
+        X_val=X_val,
+        y_val=y_val,
+        feature_names=feature_names,
+        organ_feature_cols=organ_feature_cols,
+        organ=organ,
+        l1_ratios=l1_ratios,
+        n_alphas=args.n_alphas,
+        alpha_min_ratio=args.alpha_min_ratio,
+        covariate_penalty_factor=args.covariate_penalty_factor,
+    )
     print("Best validation model:")
     print(json.dumps(best | {"coef": "omitted"}, indent=2))
     print("Refitting final model on train+validation...")

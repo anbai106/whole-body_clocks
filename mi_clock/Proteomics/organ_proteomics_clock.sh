@@ -45,7 +45,10 @@ python /cbica/home/wenju/Project/whole-body_clocks/mi_clock/Proteomics/organ_pro
   --admin-censor-date 2022-11-30 \
   --outdir "${outdir}" \
   --organ "${organ}" \
-  --omics-session-id ses-M0
+  --omics-session-id ses-M0 \
+  --l1-ratios 0.01,0.05,0.1,0.25,0.5 \
+  --alpha-min-ratio 0.01 \
+  --covariate-penalty-factor 0.05
 
 echo "============================================================"
 echo "Finished organ proteomics mi clock"
