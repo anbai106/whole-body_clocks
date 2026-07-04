@@ -16,7 +16,7 @@ cov_tsv=${COV_TSV:-/cbica/home/wenju/Reproducibile_paper/PRS_UKBB/prediction/dat
 #   DELTA_COLUMN=delta_accel_years_1_minus_0 bash this_script.sh <endpoint> <output.tsv>
 delta_column=${DELTA_COLUMN:-delta_clock_age_1_minus_0}
 
-python_script=/cbica/home/wenju/Reproducibile_paper/WholeBodyClock/mortality_clock/longitudinal/metabolomics/metabolomics_delta_acceleration_years_landmark_survival_analysis/survival_analysis_delta_metabolomics_disease_onset.py
+python_script=/cbica/home/wenju/Project/whole-body_clocks/mortality_clock/Metabolomics/longitudinal/survival_analysis_delta_metabolomics_disease_onset.py
 
 source activate survival
 
