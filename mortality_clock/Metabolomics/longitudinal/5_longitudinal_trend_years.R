@@ -1,6 +1,5 @@
-# ============================================================
-# Longitudinal metabolomics mortality-clock z-score
-# (de)acceleration analysis across UKB instances
+# Longitudinal metabolomics mortality-clock acceleration-years
+# analysis across UKB instances
 #
 # Baseline/model metabolomics instance:
 #   Instance 0_0
@@ -9,15 +8,24 @@
 #   Instance 1_0
 #
 # Main y-axis variable:
-#   {organ}_metabolomics_mortality_clock_acceleration_z
+#   {organ}_metabolomics_mortality_clock_acceleration_years
+#
+# IMPORTANT CASE DEFINITION FOR PAIRED LONGITUDINAL ANALYSIS:
+#   Cases     = participants who died after instance 1 sample date
+#               and before administrative censoring.
+#   Non-cases = participants alive/censored after instance 1.
+#
+# This is a landmark definition at instance 1, because delta values
+# are only observable among participants who survived and returned
+# for instance 1.
 #
 # Organs:
 #   Endocrine, Digestive, Hepatic, Immune
 #
 # Final plots/tables are generated for:
 #   1) Whole sample
-#   2) Cases
-#   3) Non-cases
+#   2) Cases after instance 1
+#   3) Non-cases after instance 1
 # ============================================================
 
 suppressPackageStartupMessages({
@@ -29,6 +37,8 @@ suppressPackageStartupMessages({
   library(lmerTest)
   library(broom.mixed)
   library(scales)
+  library(broom)
+  library(survival)
 })
 
 # -----------------------------
@@ -41,7 +51,7 @@ longitudinal_root <- "/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/m
 
 id_match_csv <- "/Users/hao/cubic-home/Dataset/UKBB_UMelbourne/UKB_UMelbourne_vs_Penn_match_key.csv"
 
-organ_labels <- c("Endocrine", "Digestive", "Hepatic", 'Immune')
+organ_labels <- c("Endocrine", "Digestive", "Hepatic", "Immune")
 organ_clean_vec <- tolower(organ_labels)
 names(organ_clean_vec) <- organ_labels
 
@@ -49,7 +59,7 @@ admin_censor_date_default <- as.Date("2022-11-30")
 
 main_outdir <- file.path(
   longitudinal_root,
-  "longitudinal_metabolomics_mortality_clock_zscore_acceleration_analysis"
+  "longitudinal_metabolomics_mortality_clock_acceleration_years_analysis"
 )
 dir.create(main_outdir, recursive = TRUE, showWarnings = FALSE)
 
@@ -392,6 +402,9 @@ read_metabolomics_clock_instance <- function(file, organ_clean, instance_id, ins
       clock_acceleration_years = suppressWarnings(as.numeric(.data[[years_col]])),
       clock_age_years = suppressWarnings(as.numeric(.data[[age_col]])),
 
+      # Keep this event variable for diagnostics only.
+      # Formal longitudinal case/non-case definition below is recomputed
+      # using instance 1 sample date as the landmark.
       event_from_column = parse_event_column(event),
       event_from_dates = case_when(
         !is.na(death_date) & !is.na(sample_date) & !is.na(admin_censor_date) ~
@@ -462,7 +475,7 @@ run_lmm_by_group <- function(df, group_name) {
   }
 
   fit <- tryCatch(
-    lmer(clock_acceleration_z ~ visit_order + (1 | participant_id), data = df),
+    lmer(clock_acceleration_years ~ visit_order + (1 | participant_id), data = df),
     error = function(e) NULL
   )
 
@@ -501,7 +514,7 @@ run_lmm_by_group <- function(df, group_name) {
     label = paste0(
       group_name,
       ": LMM \u03B2 = ", fmt_num(tt$estimate[1], 2),
-      " z/visit (95% CI ",
+      " acceleration-years/visit (95% CI ",
       fmt_num(tt$conf.low[1], 2), ", ",
       fmt_num(tt$conf.high[1], 2),
       "), P = ", fmt_p(tt$p.value[1])
@@ -532,7 +545,7 @@ run_lmm_year_by_group <- function(df, group_name) {
   }
 
   fit <- tryCatch(
-    lmer(clock_acceleration_z ~ sample_year + (1 | participant_id), data = df),
+    lmer(clock_acceleration_years ~ sample_year + (1 | participant_id), data = df),
     error = function(e) NULL
   )
 
@@ -578,7 +591,7 @@ run_one_organ <- function(organ_label) {
   organ_clean <- organ_clean_vec[[organ_label]]
 
   message("\n============================================================")
-  message("Running longitudinal metabolomics z-score acceleration analysis for: ", organ_label)
+  message("Running longitudinal metabolomics acceleration-years analysis for: ", organ_label)
   message("Clean organ name: ", organ_clean)
   message("============================================================")
 
@@ -636,7 +649,7 @@ run_one_organ <- function(organ_label) {
     )
 
   common_ids <- dat_all %>%
-    filter(!is.na(clock_acceleration_z)) %>%
+    filter(!is.na(clock_acceleration_years)) %>%
     distinct(participant_id, application_instance) %>%
     count(participant_id, name = "n_instances") %>%
     filter(n_instances == 2) %>%
@@ -670,32 +683,84 @@ run_one_organ <- function(organ_label) {
 
   dat_common <- dat_all %>%
     filter(participant_id %in% common_ids) %>%
-    filter(!is.na(clock_acceleration_z)) %>%
+    filter(!is.na(clock_acceleration_years)) %>%
     arrange(participant_id, visit_order)
 
-  # Case status from baseline instance 0.
+  # ------------------------------------------------------------
+  # Correct longitudinal case definition:
+  # Landmark status from instance 1.
+  #
+  # Cases:
+  #   Died after instance 1 sample date and before admin censoring.
+  #
+  # Non-cases:
+  #   Alive/censored after instance 1.
+  #
+  # This replaces the older baseline-based case definition.
+  # ------------------------------------------------------------
+
   case_status_tbl <- dat_common %>%
-    filter(application_instance == "0_0") %>%
+    filter(application_instance == "1_0") %>%
     group_by(participant_id) %>%
     summarise(
-      event_baseline = any(event %in% TRUE, na.rm = TRUE),
-      death_date_baseline = safe_min_date(death_date),
-      sample_date_baseline = safe_min_date(sample_date),
-      admin_censor_date_baseline = safe_min_date(admin_censor_date),
+      death_date_instance1 = safe_min_date(death_date),
+      sample_date_instance1 = safe_min_date(sample_date),
+      admin_censor_date_instance1 = safe_min_date(admin_censor_date),
       .groups = "drop"
     ) %>%
     mutate(
-      event_from_dates_baseline = case_when(
-        !is.na(death_date_baseline) & !is.na(sample_date_baseline) & !is.na(admin_censor_date_baseline) ~
-          death_date_baseline > sample_date_baseline & death_date_baseline <= admin_censor_date_baseline,
-        !is.na(death_date_baseline) & !is.na(sample_date_baseline) & is.na(admin_censor_date_baseline) ~
-          death_date_baseline > sample_date_baseline,
+      admin_censor_date_instance1 = if_else(
+        is.na(admin_censor_date_instance1),
+        admin_censor_date_default,
+        admin_censor_date_instance1
+      ),
+
+      event_after_instance1 = case_when(
+        !is.na(death_date_instance1) &
+          !is.na(sample_date_instance1) &
+          !is.na(admin_censor_date_instance1) ~
+          death_date_instance1 > sample_date_instance1 &
+          death_date_instance1 <= admin_censor_date_instance1,
+
+        !is.na(death_date_instance1) &
+          !is.na(sample_date_instance1) &
+          is.na(admin_censor_date_instance1) ~
+          death_date_instance1 > sample_date_instance1,
+
         TRUE ~ FALSE
       ),
-      event_any = event_baseline | event_from_dates_baseline,
-      case_status = if_else(event_any, "Cases", "Non-cases")
+
+      end_date_from_instance1 = case_when(
+        event_after_instance1 ~ death_date_instance1,
+        !is.na(admin_censor_date_instance1) ~ admin_censor_date_instance1,
+        TRUE ~ as.Date(NA)
+      ),
+
+      time_from_instance1_days = as.numeric(end_date_from_instance1 - sample_date_instance1),
+      time_from_instance1_years = time_from_instance1_days / 365.25,
+
+      case_status = case_when(
+        is.na(sample_date_instance1) ~ NA_character_,
+        event_after_instance1 ~ "Cases",
+        TRUE ~ "Non-cases"
+      )
     ) %>%
-    select(participant_id, event_any, case_status)
+    select(
+      participant_id,
+      sample_date_instance1,
+      death_date_instance1,
+      admin_censor_date_instance1,
+      end_date_from_instance1,
+      time_from_instance1_years,
+      event_after_instance1,
+      case_status
+    )
+
+  fwrite(
+    case_status_tbl,
+    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_landmark_case_status_from_instance1.tsv")),
+    sep = "\t"
+  )
 
   dat_common <- dat_common %>%
     left_join(case_status_tbl, by = "participant_id") %>%
@@ -703,8 +768,10 @@ run_one_organ <- function(organ_label) {
       case_status = factor(case_status, levels = c("Cases", "Non-cases"))
     )
 
-  cat("N cases among common population:", n_distinct(dat_common$participant_id[dat_common$case_status == "Cases"]), "\n")
-  cat("N non-cases among common population:", n_distinct(dat_common$participant_id[dat_common$case_status == "Non-cases"]), "\n")
+  cat("N cases after instance 1 among common population:",
+      n_distinct(dat_common$participant_id[dat_common$case_status == "Cases"]), "\n")
+  cat("N non-cases after instance 1 among common population:",
+      n_distinct(dat_common$participant_id[dat_common$case_status == "Non-cases"]), "\n")
 
   dat_plot <- bind_rows(
     dat_common %>% mutate(analysis_group = "Whole sample"),
@@ -717,13 +784,13 @@ run_one_organ <- function(organ_label) {
 
   fwrite(
     dat_common,
-    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_z_common_population_long.tsv")),
+    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_acceleration_years_common_population_long.tsv")),
     sep = "\t"
   )
 
   fwrite(
     dat_plot,
-    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_z_plot_dataset_with_groups.tsv")),
+    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_acceleration_years_plot_dataset_with_groups.tsv")),
     sep = "\t"
   )
 
@@ -758,7 +825,7 @@ run_one_organ <- function(organ_label) {
 
   fwrite(
     summary_tbl,
-    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_z_instance_summary_by_group.tsv")),
+    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_acceleration_years_instance_summary_by_group.tsv")),
     sep = "\t"
   )
 
@@ -776,7 +843,13 @@ run_one_organ <- function(organ_label) {
       clock_acceleration_z,
       clock_acceleration_years,
       chronological_age,
-      clock_age_years
+      clock_age_years,
+      sample_date_instance1,
+      death_date_instance1,
+      admin_censor_date_instance1,
+      end_date_from_instance1,
+      time_from_instance1_years,
+      event_after_instance1
     ) %>%
     pivot_wider(
       names_from = application_instance,
@@ -788,7 +861,7 @@ run_one_organ <- function(organ_label) {
       )
     )
 
-  required_wide_cols <- c("clock_acceleration_z_0_0", "clock_acceleration_z_1_0")
+  required_wide_cols <- c("clock_acceleration_years_0_0", "clock_acceleration_years_1_0")
   missing_wide_cols <- setdiff(required_wide_cols, names(dat_wide))
 
   if (length(missing_wide_cols) > 0) {
@@ -800,7 +873,7 @@ run_one_organ <- function(organ_label) {
 
     fwrite(
       dat_wide,
-      file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_z_common_population_wide_INCOMPLETE.tsv")),
+      file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_acceleration_years_common_population_wide_INCOMPLETE.tsv")),
       sep = "\t"
     )
 
@@ -817,7 +890,7 @@ run_one_organ <- function(organ_label) {
 
   fwrite(
     dat_wide,
-    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_z_common_population_wide_deltas_by_group.tsv")),
+    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_acceleration_years_common_population_wide_deltas_by_group.tsv")),
     sep = "\t"
   )
 
@@ -826,15 +899,21 @@ run_one_organ <- function(organ_label) {
     summarise(
       n = n(),
 
+      mean_acceleration_years_0 = mean(clock_acceleration_years_0_0, na.rm = TRUE),
+      mean_acceleration_years_1 = mean(clock_acceleration_years_1_0, na.rm = TRUE),
+
+      mean_delta_accel_years_1_minus_0 = mean(delta_accel_years_1_minus_0, na.rm = TRUE),
+      sd_delta_accel_years_1_minus_0 = sd(delta_accel_years_1_minus_0, na.rm = TRUE),
+      median_delta_accel_years_1_minus_0 = median(delta_accel_years_1_minus_0, na.rm = TRUE),
+      p_wilcox_accel_years_1_vs_0 = safe_wilcox_p(clock_acceleration_years_1_0, clock_acceleration_years_0_0),
+
       mean_z_0 = mean(clock_acceleration_z_0_0, na.rm = TRUE),
       mean_z_1 = mean(clock_acceleration_z_1_0, na.rm = TRUE),
-
       mean_delta_z_1_minus_0 = mean(delta_z_1_minus_0, na.rm = TRUE),
       sd_delta_z_1_minus_0 = sd(delta_z_1_minus_0, na.rm = TRUE),
       median_delta_z_1_minus_0 = median(delta_z_1_minus_0, na.rm = TRUE),
       p_wilcox_z_1_vs_0 = safe_wilcox_p(clock_acceleration_z_1_0, clock_acceleration_z_0_0),
 
-      mean_delta_accel_years_1_minus_0 = mean(delta_accel_years_1_minus_0, na.rm = TRUE),
       mean_delta_chrono_age_1_minus_0 = mean(delta_chrono_age_1_minus_0, na.rm = TRUE),
       mean_delta_clock_age_1_minus_0 = mean(delta_clock_age_1_minus_0, na.rm = TRUE),
 
@@ -843,7 +922,7 @@ run_one_organ <- function(organ_label) {
 
   fwrite(
     delta_summary_tbl,
-    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_z_delta_summary_by_group.tsv")),
+    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_acceleration_years_delta_summary_by_group.tsv")),
     sep = "\t"
   )
 
@@ -864,7 +943,7 @@ run_one_organ <- function(organ_label) {
 
   fwrite(
     lmm_tbl,
-    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_z_lmm_visit_order_trend_by_group.tsv")),
+    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_acceleration_years_lmm_visit_order_trend_by_group.tsv")),
     sep = "\t"
   )
 
@@ -881,11 +960,11 @@ run_one_organ <- function(organ_label) {
 
   fwrite(
     lmm_year_tbl,
-    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_z_lmm_sample_year_trend_by_group.tsv")),
+    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_acceleration_years_lmm_sample_year_trend_by_group.tsv")),
     sep = "\t"
   )
 
-  # Case-status interaction
+  # Case-status interaction using landmark case status from instance 1.
   interaction_tbl <- tryCatch({
     interaction_dat <- dat_common %>%
       filter(!is.na(case_status)) %>%
@@ -896,7 +975,7 @@ run_one_organ <- function(organ_label) {
       n_distinct(interaction_dat$case_status) == 2
     ) {
       fit_int <- lmer(
-        clock_acceleration_z ~ visit_order * case_status + (1 | participant_id),
+        clock_acceleration_years ~ visit_order * case_status + (1 | participant_id),
         data = interaction_dat
       )
 
@@ -932,7 +1011,7 @@ run_one_organ <- function(organ_label) {
 
   fwrite(
     interaction_tbl,
-    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_z_lmm_case_status_interaction.tsv")),
+    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_acceleration_years_lmm_case_status_interaction.tsv")),
     sep = "\t"
   )
 
@@ -940,8 +1019,8 @@ run_one_organ <- function(organ_label) {
   # Annotation tables
   # -----------------------------
 
-  global_y_max <- max(dat_plot$clock_acceleration_z, na.rm = TRUE)
-  global_y_min <- min(dat_plot$clock_acceleration_z, na.rm = TRUE)
+  global_y_max <- max(dat_plot$clock_acceleration_years, na.rm = TRUE)
+  global_y_min <- min(dat_plot$clock_acceleration_years, na.rm = TRUE)
   global_y_range <- global_y_max - global_y_min
 
   if (!is.finite(global_y_range) || global_y_range == 0) {
@@ -951,10 +1030,10 @@ run_one_organ <- function(organ_label) {
   ann_tbl <- lmm_tbl %>%
     mutate(
       x = 1,
-      y = global_y_max + 0.16 * global_y_range,
+      y = global_y_max + 0.18 * global_y_range,
       label_short = paste0(
         "LMM \u03B2 = ", fmt_num(estimate, 2),
-        " z/visit\nP = ", vapply(p.value, fmt_p, character(1))
+        " acceleration-years/visit\nP = ", vapply(p.value, fmt_p, character(1))
       )
     )
 
@@ -962,30 +1041,86 @@ run_one_organ <- function(organ_label) {
     mutate(
       analysis_group = factor(analysis_group, levels = c("Whole sample", "Cases", "Non-cases")),
       x = 1,
-      y = global_y_max + 0.08 * global_y_range,
-      delta_label = paste0("\u0394 z: 1-0 = ", fmt_num(mean_delta_z_1_minus_0, 2))
+      y = global_y_max + 0.10 * global_y_range,
+      delta_label = paste0("\u0394 acceleration years: 1-0 = ", fmt_num(mean_delta_accel_years_1_minus_0, 2))
     )
 
   caution_ann_tbl <- data.frame(
-    analysis_group = factor(c("Whole sample", "Cases", "Non-cases"), levels = c("Whole sample", "Cases", "Non-cases")),
+    analysis_group = factor(
+      c("Whole sample", "Cases", "Non-cases"),
+      levels = c("Whole sample", "Cases", "Non-cases")
+    ),
     x = 1,
-    y = global_y_max + 0.01 * global_y_range,
-    caution_label = "Caution: cross-instance calibration may affect absolute z-score offsets"
+    y = global_y_max + 0.02 * global_y_range,
+    caution_label = "Landmark cases: death after instance 1; paired sample survived/returned for follow-up"
+  )
+
+  n_label_tbl <- dat_plot %>%
+    group_by(analysis_group, instance_label) %>%
+    summarise(
+      n_participants = n_distinct(participant_id),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      analysis_group = factor(analysis_group, levels = c("Whole sample", "Cases", "Non-cases")),
+      y = global_y_min - 0.08 * global_y_range,
+      n_label = paste0("N = ", comma(n_participants))
+    )
+
+  group_n_tbl <- dat_plot %>%
+    distinct(analysis_group, participant_id) %>%
+    group_by(analysis_group) %>%
+    summarise(n_participants = n_distinct(participant_id), .groups = "drop") %>%
+    mutate(
+      analysis_group = factor(analysis_group, levels = c("Whole sample", "Cases", "Non-cases"))
+    )
+
+  group_n_subtitle <- paste0(
+    "Whole sample N = ", comma(group_n_tbl$n_participants[group_n_tbl$analysis_group == "Whole sample"]),
+    "; Cases after instance 1 N = ", comma(group_n_tbl$n_participants[group_n_tbl$analysis_group == "Cases"]),
+    "; Non-cases after instance 1 N = ", comma(group_n_tbl$n_participants[group_n_tbl$analysis_group == "Non-cases"])
   )
 
   # -----------------------------
   # Figure 1: Distribution
+  # Violin + embedded boxplot only; no participant-level dots.
   # -----------------------------
 
   p_dist <- ggplot(
     dat_plot,
-    aes(x = instance_label, y = clock_acceleration_z, fill = instance_label, color = instance_label)
+    aes(x = instance_label, y = clock_acceleration_years, fill = instance_label, color = instance_label)
   ) +
     geom_hline(yintercept = 0, linetype = "dashed", color = "grey40", linewidth = 0.6) +
-    geom_violin(trim = FALSE, alpha = 0.28, linewidth = 0.5) +
-    geom_boxplot(width = 0.18, outlier.shape = NA, alpha = 0.70, linewidth = 0.5) +
-    geom_jitter(width = 0.06, alpha = 0.12, size = 0.65, show.legend = FALSE) +
-    stat_summary(fun = mean, geom = "point", size = 2.8, shape = 21, fill = "white", color = "black") +
+    geom_violin(
+      trim = FALSE,
+      alpha = 0.32,
+      linewidth = 0.5,
+      scale = "width"
+    ) +
+    geom_boxplot(
+      width = 0.18,
+      outlier.shape = NA,
+      alpha = 0.82,
+      linewidth = 0.55,
+      color = "black"
+    ) +
+    stat_summary(
+      fun = mean,
+      geom = "point",
+      size = 2.8,
+      shape = 21,
+      fill = "white",
+      color = "black",
+      stroke = 0.7
+    ) +
+    geom_text(
+      data = n_label_tbl,
+      aes(x = instance_label, y = y, label = n_label),
+      inherit.aes = FALSE,
+      size = 3.1,
+      fontface = "bold",
+      color = "black"
+    ) +
     geom_text(
       data = ann_tbl,
       aes(x = x, y = y, label = label_short),
@@ -1011,14 +1146,14 @@ run_one_organ <- function(organ_label) {
     scale_fill_manual(values = instance_palette_fill, guide = "none") +
     scale_color_manual(values = instance_palette, guide = "none") +
     coord_cartesian(
-      ylim = c(global_y_min, global_y_max + 0.25 * global_y_range),
+      ylim = c(global_y_min - 0.13 * global_y_range, global_y_max + 0.28 * global_y_range),
       clip = "off"
     ) +
     labs(
       x = NULL,
-      y = paste0(title_case(organ_clean), " metabolomics mortality-clock (de)acceleration z-score"),
-      title = paste0(title_case(organ_clean), " metabolomics mortality-clock z-score (de)acceleration"),
-      subtitle = paste0("Common participants across instance 0 and 1: N = ", length(common_ids))
+      y = paste0(title_case(organ_clean), " metabolomics mortality-clock acceleration years"),
+      title = paste0(title_case(organ_clean), " metabolomics mortality-clock acceleration years"),
+      subtitle = group_n_subtitle
     ) +
     theme_classic(base_size = 13) +
     theme(
@@ -1026,26 +1161,463 @@ run_one_organ <- function(organ_label) {
       plot.subtitle = element_text(size = 11),
       strip.text = element_text(face = "bold", size = 12),
       axis.text.x = element_text(size = 10, face = "bold"),
-      plot.margin = margin(10, 20, 10, 10)
+      plot.margin = margin(10, 20, 25, 10)
     )
 
   ggsave(
-    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_z_distribution_by_case_status.pdf")),
+    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_acceleration_years_distribution_by_case_status.pdf")),
     p_dist,
     width = 13.5,
     height = 6.2
   )
 
   ggsave(
-    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_z_distribution_by_case_status.png")),
+    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_acceleration_years_distribution_by_case_status.png")),
     p_dist,
     width = 13.5,
     height = 6.2,
     dpi = 300
   )
 
+  ggsave(
+    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_acceleration_years_distribution_by_case_status.svg")),
+    p_dist,
+    width = 13.5,
+    height = 6.2
+  )
+
   # -----------------------------
-  # Figure 2: Mean +/- 95% CI trend
+  # Figure 1b: Individual-level delta acceleration years
+  # versus chronological age at baseline
+  # -----------------------------
+
+  delta_age_plot_tbl <- dat_wide %>%
+    filter(
+      !is.na(delta_accel_years_1_minus_0),
+      !is.na(chronological_age_0_0)
+    ) %>%
+    mutate(
+      analysis_group = factor(analysis_group, levels = c("Whole sample", "Cases", "Non-cases"))
+    )
+
+  fwrite(
+    delta_age_plot_tbl,
+    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_delta_acceleration_years_vs_baseline_age_plot_dataset.tsv")),
+    sep = "\t"
+  )
+
+  delta_age_summary_tbl <- delta_age_plot_tbl %>%
+    group_by(analysis_group) %>%
+    summarise(
+      n = n(),
+      n_participants = n_distinct(participant_id),
+      mean_baseline_age = mean(chronological_age_0_0, na.rm = TRUE),
+      sd_baseline_age = sd(chronological_age_0_0, na.rm = TRUE),
+      mean_delta_accel_years = mean(delta_accel_years_1_minus_0, na.rm = TRUE),
+      sd_delta_accel_years = sd(delta_accel_years_1_minus_0, na.rm = TRUE),
+      cor_pearson = suppressWarnings(cor(
+        chronological_age_0_0,
+        delta_accel_years_1_minus_0,
+        use = "complete.obs",
+        method = "pearson"
+      )),
+      cor_spearman = suppressWarnings(cor(
+        chronological_age_0_0,
+        delta_accel_years_1_minus_0,
+        use = "complete.obs",
+        method = "spearman"
+      )),
+      .groups = "drop"
+    )
+
+  fwrite(
+    delta_age_summary_tbl,
+    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_delta_acceleration_years_vs_baseline_age_summary.tsv")),
+    sep = "\t"
+  )
+
+  delta_age_lm_tbl <- delta_age_plot_tbl %>%
+    group_by(analysis_group) %>%
+    group_modify(~ {
+      if (nrow(.x) < 5) {
+        return(data.frame(
+          term = "chronological_age_0_0",
+          estimate = NA_real_,
+          std.error = NA_real_,
+          statistic = NA_real_,
+          p.value = NA_real_,
+          conf.low = NA_real_,
+          conf.high = NA_real_
+        ))
+      }
+
+      fit <- lm(delta_accel_years_1_minus_0 ~ chronological_age_0_0, data = .x)
+
+      broom::tidy(fit, conf.int = TRUE) %>%
+        filter(term == "chronological_age_0_0")
+    }) %>%
+    ungroup() %>%
+    mutate(
+      label = paste0(
+        "N = ", comma(delta_age_summary_tbl$n_participants[
+          match(as.character(analysis_group), as.character(delta_age_summary_tbl$analysis_group))
+        ]),
+        "\n\u03B2 = ", fmt_num(estimate, 2),
+        " years/year\nP = ", vapply(p.value, fmt_p, character(1))
+      )
+    )
+
+  fwrite(
+    delta_age_lm_tbl,
+    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_delta_acceleration_years_vs_baseline_age_lm.tsv")),
+    sep = "\t"
+  )
+
+  delta_y_max <- max(delta_age_plot_tbl$delta_accel_years_1_minus_0, na.rm = TRUE)
+  delta_y_min <- min(delta_age_plot_tbl$delta_accel_years_1_minus_0, na.rm = TRUE)
+  delta_y_range <- delta_y_max - delta_y_min
+
+  if (!is.finite(delta_y_range) || delta_y_range == 0) {
+    delta_y_range <- 1
+  }
+
+  delta_age_ann_tbl <- delta_age_lm_tbl %>%
+    mutate(
+      analysis_group = factor(analysis_group, levels = c("Whole sample", "Cases", "Non-cases")),
+      x = min(delta_age_plot_tbl$chronological_age_0_0, na.rm = TRUE),
+      y = delta_y_max + 0.08 * delta_y_range
+    )
+
+  p_delta_age <- ggplot(
+    delta_age_plot_tbl,
+    aes(x = chronological_age_0_0, y = delta_accel_years_1_minus_0)
+  ) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "grey40", linewidth = 0.7) +
+    geom_point(
+      aes(color = analysis_group),
+      alpha = 0.22,
+      size = 0.75,
+      stroke = 0
+    ) +
+    geom_smooth(
+      method = "lm",
+      se = TRUE,
+      linewidth = 0.9,
+      color = "black"
+    ) +
+    geom_text(
+      data = delta_age_ann_tbl,
+      aes(x = x, y = y, label = label),
+      inherit.aes = FALSE,
+      hjust = 0,
+      size = 3.1,
+      fontface = "bold"
+    ) +
+    facet_wrap(~ analysis_group, nrow = 1, drop = TRUE) +
+    scale_color_manual(values = group_palette, guide = "none") +
+    coord_cartesian(
+      ylim = c(delta_y_min, delta_y_max + 0.22 * delta_y_range),
+      clip = "off"
+    ) +
+    labs(
+      x = "Chronological age at baseline, instance 0 (years)",
+      y = paste0(
+        "\u0394 ",
+        title_case(organ_clean),
+        " metabolomics mortality-clock acceleration years\n(instance 1 - instance 0)"
+      ),
+      title = paste0(
+        title_case(organ_clean),
+        " longitudinal change in metabolomics mortality-clock acceleration years"
+      ),
+      subtitle = "Landmark groups defined by death/censoring after instance 1"
+    ) +
+    theme_classic(base_size = 13) +
+    theme(
+      plot.title = element_text(face = "bold"),
+      plot.subtitle = element_text(size = 11),
+      strip.text = element_text(face = "bold", size = 12),
+      plot.margin = margin(10, 20, 10, 10)
+    )
+
+  ggsave(
+    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_delta_acceleration_years_vs_baseline_age_by_case_status.pdf")),
+    p_delta_age,
+    width = 13.5,
+    height = 6.2
+  )
+
+  ggsave(
+    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_delta_acceleration_years_vs_baseline_age_by_case_status.png")),
+    p_delta_age,
+    width = 13.5,
+    height = 6.2,
+    dpi = 300
+  )
+
+  ggsave(
+    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_delta_acceleration_years_vs_baseline_age_by_case_status.svg")),
+    p_delta_age,
+    width = 13.5,
+    height = 6.2
+  )
+
+  # -----------------------------
+  # Figure 1c: Individual-level delta acceleration years
+  # versus baseline acceleration years
+  #
+  # y-axis:
+  #   acceleration years at instance 1 - acceleration years at instance 0
+  #
+  # x-axis:
+  #   acceleration years at baseline, instance 0
+  #
+  # Facets:
+  #   Whole sample, Cases, Non-cases
+  # -----------------------------
+
+  delta_vs_baseline_accel_plot_tbl <- dat_wide %>%
+    filter(
+      !is.na(delta_accel_years_1_minus_0),
+      !is.na(clock_acceleration_years_0_0)
+    ) %>%
+    mutate(
+      analysis_group = factor(
+        analysis_group,
+        levels = c("Whole sample", "Cases", "Non-cases")
+      )
+    )
+
+  fwrite(
+    delta_vs_baseline_accel_plot_tbl,
+    file.path(
+      outdir,
+      paste0(
+        organ_clean,
+        "_metabolomics_mortality_delta_acceleration_years_vs_baseline_acceleration_years_plot_dataset.tsv"
+      )
+    ),
+    sep = "\t"
+  )
+
+  delta_vs_baseline_accel_summary_tbl <- delta_vs_baseline_accel_plot_tbl %>%
+    group_by(analysis_group) %>%
+    summarise(
+      n = n(),
+      n_participants = n_distinct(participant_id),
+      mean_baseline_accel_years = mean(clock_acceleration_years_0_0, na.rm = TRUE),
+      sd_baseline_accel_years = sd(clock_acceleration_years_0_0, na.rm = TRUE),
+      mean_delta_accel_years = mean(delta_accel_years_1_minus_0, na.rm = TRUE),
+      sd_delta_accel_years = sd(delta_accel_years_1_minus_0, na.rm = TRUE),
+      cor_pearson = suppressWarnings(cor(
+        clock_acceleration_years_0_0,
+        delta_accel_years_1_minus_0,
+        use = "complete.obs",
+        method = "pearson"
+      )),
+      cor_spearman = suppressWarnings(cor(
+        clock_acceleration_years_0_0,
+        delta_accel_years_1_minus_0,
+        use = "complete.obs",
+        method = "spearman"
+      )),
+      .groups = "drop"
+    )
+
+  fwrite(
+    delta_vs_baseline_accel_summary_tbl,
+    file.path(
+      outdir,
+      paste0(
+        organ_clean,
+        "_metabolomics_mortality_delta_acceleration_years_vs_baseline_acceleration_years_summary.tsv"
+      )
+    ),
+    sep = "\t"
+  )
+
+  delta_vs_baseline_accel_lm_tbl <- delta_vs_baseline_accel_plot_tbl %>%
+    group_by(analysis_group) %>%
+    group_modify(~ {
+      if (nrow(.x) < 5) {
+        return(data.frame(
+          term = "clock_acceleration_years_0_0",
+          estimate = NA_real_,
+          std.error = NA_real_,
+          statistic = NA_real_,
+          p.value = NA_real_,
+          conf.low = NA_real_,
+          conf.high = NA_real_
+        ))
+      }
+
+      fit <- lm(delta_accel_years_1_minus_0 ~ clock_acceleration_years_0_0, data = .x)
+
+      broom::tidy(fit, conf.int = TRUE) %>%
+        filter(term == "clock_acceleration_years_0_0")
+    }) %>%
+    ungroup() %>%
+    mutate(
+      label = paste0(
+        "N = ", comma(delta_vs_baseline_accel_summary_tbl$n_participants[
+          match(analysis_group, delta_vs_baseline_accel_summary_tbl$analysis_group)
+        ]),
+        "\n\u03B2 = ", fmt_num(estimate, 2),
+        " years/year\nP = ", vapply(p.value, fmt_p, character(1))
+      )
+    )
+
+  fwrite(
+    delta_vs_baseline_accel_lm_tbl,
+    file.path(
+      outdir,
+      paste0(
+        organ_clean,
+        "_metabolomics_mortality_delta_acceleration_years_vs_baseline_acceleration_years_lm.tsv"
+      )
+    ),
+    sep = "\t"
+  )
+
+  delta_ba_y_max <- max(delta_vs_baseline_accel_plot_tbl$delta_accel_years_1_minus_0, na.rm = TRUE)
+  delta_ba_y_min <- min(delta_vs_baseline_accel_plot_tbl$delta_accel_years_1_minus_0, na.rm = TRUE)
+  delta_ba_y_range <- delta_ba_y_max - delta_ba_y_min
+
+  if (!is.finite(delta_ba_y_range) || delta_ba_y_range == 0) {
+    delta_ba_y_range <- 1
+  }
+
+  delta_ba_x_min <- min(delta_vs_baseline_accel_plot_tbl$clock_acceleration_years_0_0, na.rm = TRUE)
+
+  delta_vs_baseline_accel_ann_tbl <- delta_vs_baseline_accel_lm_tbl %>%
+    mutate(
+      analysis_group = factor(
+        analysis_group,
+        levels = c("Whole sample", "Cases", "Non-cases")
+      ),
+      x = delta_ba_x_min,
+      y = delta_ba_y_max + 0.08 * delta_ba_y_range
+    )
+
+  p_delta_vs_baseline_accel <- ggplot(
+    delta_vs_baseline_accel_plot_tbl,
+    aes(x = clock_acceleration_years_0_0, y = delta_accel_years_1_minus_0)
+  ) +
+    geom_hline(
+      yintercept = 0,
+      linetype = "dashed",
+      color = "grey40",
+      linewidth = 0.7
+    ) +
+    geom_vline(
+      xintercept = 0,
+      linetype = "dotted",
+      color = "grey50",
+      linewidth = 0.6
+    ) +
+    geom_point(
+      aes(color = analysis_group),
+      alpha = 0.22,
+      size = 0.75,
+      stroke = 0
+    ) +
+    geom_smooth(
+      method = "lm",
+      se = TRUE,
+      linewidth = 0.9,
+      color = "black"
+    ) +
+    geom_text(
+      data = delta_vs_baseline_accel_ann_tbl,
+      aes(x = x, y = y, label = label),
+      inherit.aes = FALSE,
+      hjust = 0,
+      size = 3.1,
+      fontface = "bold"
+    ) +
+    facet_wrap(~ analysis_group, nrow = 1, drop = TRUE) +
+    scale_color_manual(values = group_palette, guide = "none") +
+    coord_cartesian(
+      ylim = c(delta_ba_y_min, delta_ba_y_max + 0.22 * delta_ba_y_range),
+      clip = "off"
+    ) +
+    labs(
+      x = paste0(
+        "Baseline ",
+        title_case(organ_clean),
+        " metabolomics mortality-clock acceleration years\n(instance 0)"
+      ),
+      y = paste0(
+        "\u0394 ",
+        title_case(organ_clean),
+        " metabolomics mortality-clock acceleration years\n(instance 1 - instance 0)"
+      ),
+      title = paste0(
+        title_case(organ_clean),
+        " longitudinal change in metabolomics mortality-clock acceleration years"
+      ),
+      subtitle = "Individual-level change plotted against baseline acceleration years"
+    ) +
+    theme_classic(base_size = 13) +
+    theme(
+      plot.title = element_text(face = "bold"),
+      plot.subtitle = element_text(size = 11),
+      strip.text = element_text(face = "bold", size = 12),
+      plot.margin = margin(10, 20, 10, 10)
+    )
+
+  ggsave(
+    file.path(
+      outdir,
+      paste0(
+        organ_clean,
+        "_metabolomics_mortality_delta_acceleration_years_vs_baseline_acceleration_years_by_case_status.pdf"
+      )
+    ),
+    p_delta_vs_baseline_accel,
+    width = 13.5,
+    height = 6.2
+  )
+
+  ggsave(
+    file.path(
+      outdir,
+      paste0(
+        organ_clean,
+        "_metabolomics_mortality_delta_acceleration_years_vs_baseline_acceleration_years_by_case_status.png"
+      )
+    ),
+    p_delta_vs_baseline_accel,
+    width = 13.5,
+    height = 6.2,
+    dpi = 300
+  )
+
+  ggsave(
+    file.path(
+      outdir,
+      paste0(
+        organ_clean,
+        "_metabolomics_mortality_delta_acceleration_years_vs_baseline_acceleration_years_by_case_status.svg"
+      )
+    ),
+    p_delta_vs_baseline_accel,
+    width = 13.5,
+    height = 6.2
+  )
+
+  ### check whether the delta can provide additioinal power beyond baseline age and baseline clock acceleartion
+  cox_delta <- coxph(
+    Surv(time_from_instance1_years, event_after_instance1) ~
+      clock_acceleration_years_0_0 +
+      delta_accel_years_1_minus_0 +
+      chronological_age_0_0,    data = dat_wide %>% filter(analysis_group == "Whole sample")
+  )
+
+  summary(cox_delta)
+
+  # -----------------------------
+  # Figure 2: Mean +/- 95% CI trend for acceleration years
   # -----------------------------
 
   mean_se_tbl <- dat_plot %>%
@@ -1053,8 +1625,8 @@ run_one_organ <- function(organ_label) {
     summarise(
       n = n(),
       n_participants = n_distinct(participant_id),
-      mean = mean(clock_acceleration_z, na.rm = TRUE),
-      se = sd(clock_acceleration_z, na.rm = TRUE) / sqrt(n()),
+      mean = mean(clock_acceleration_years, na.rm = TRUE),
+      se = sd(clock_acceleration_years, na.rm = TRUE) / sqrt(n()),
       lower = mean - 1.96 * se,
       upper = mean + 1.96 * se,
       .groups = "drop"
@@ -1062,7 +1634,7 @@ run_one_organ <- function(organ_label) {
 
   fwrite(
     mean_se_tbl,
-    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_z_mean_se_by_instance_and_group.tsv")),
+    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_acceleration_years_mean_se_by_instance_and_group.tsv")),
     sep = "\t"
   )
 
@@ -1108,9 +1680,9 @@ run_one_organ <- function(organ_label) {
     ) +
     labs(
       x = NULL,
-      y = paste0("Mean ", title_case(organ_clean), " metabolomics mortality-clock z-score"),
-      title = paste0("Mean ", title_case(organ_clean), " metabolomics mortality-clock z-score trajectory"),
-      subtitle = paste0("Common participants across instance 0 and 1: N = ", length(common_ids))
+      y = paste0("Mean ", title_case(organ_clean), " metabolomics mortality-clock acceleration years"),
+      title = paste0("Mean ", title_case(organ_clean), " metabolomics mortality-clock acceleration-years trajectory"),
+      subtitle = group_n_subtitle
     ) +
     theme_classic(base_size = 13) +
     theme(
@@ -1122,14 +1694,14 @@ run_one_organ <- function(organ_label) {
     )
 
   ggsave(
-    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_z_mean_trend_by_case_status.pdf")),
+    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_acceleration_years_mean_trend_by_case_status.pdf")),
     p_mean,
     width = 13.5,
     height = 6.2
   )
 
   ggsave(
-    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_z_mean_trend_by_case_status.png")),
+    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_acceleration_years_mean_trend_by_case_status.png")),
     p_mean,
     width = 13.5,
     height = 6.2,
@@ -1137,7 +1709,7 @@ run_one_organ <- function(organ_label) {
   )
 
   # -----------------------------
-  # Figure 3: Spaghetti plot
+  # Figure 3: Spaghetti plot for acceleration years
   # -----------------------------
 
   set.seed(2026)
@@ -1157,13 +1729,13 @@ run_one_organ <- function(organ_label) {
   mean_traj_tbl <- dat_plot %>%
     group_by(analysis_group, visit_order, instance_label) %>%
     summarise(
-      mean = mean(clock_acceleration_z, na.rm = TRUE),
+      mean = mean(clock_acceleration_years, na.rm = TRUE),
       .groups = "drop"
     )
 
   p_spaghetti <- ggplot(
     dat_spaghetti,
-    aes(x = visit_order, y = clock_acceleration_z, group = participant_id)
+    aes(x = visit_order, y = clock_acceleration_years, group = participant_id)
   ) +
     geom_hline(yintercept = 0, linetype = "dashed", color = "grey40", linewidth = 0.6) +
     geom_line(alpha = 0.10, color = "grey50") +
@@ -1191,8 +1763,8 @@ run_one_organ <- function(organ_label) {
     ) +
     labs(
       x = NULL,
-      y = paste0(title_case(organ_clean), " metabolomics mortality-clock z-score"),
-      title = paste0("Within-person ", title_case(organ_clean), " metabolomics mortality-clock z-score trajectories"),
+      y = paste0(title_case(organ_clean), " metabolomics mortality-clock acceleration years"),
+      title = paste0("Within-person ", title_case(organ_clean), " metabolomics mortality-clock acceleration-years trajectories"),
       subtitle = "Thin lines show sampled participants; black line shows mean trajectory"
     ) +
     theme_classic(base_size = 13) +
@@ -1204,14 +1776,14 @@ run_one_organ <- function(organ_label) {
     )
 
   ggsave(
-    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_z_spaghetti_by_case_status.pdf")),
+    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_acceleration_years_spaghetti_by_case_status.pdf")),
     p_spaghetti,
     width = 13.5,
     height = 6.2
   )
 
   ggsave(
-    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_z_spaghetti_by_case_status.png")),
+    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_acceleration_years_spaghetti_by_case_status.png")),
     p_spaghetti,
     width = 13.5,
     height = 6.2,
@@ -1219,12 +1791,12 @@ run_one_organ <- function(organ_label) {
   )
 
   # -----------------------------
-  # Figure 4: z-score versus chronological age
+  # Figure 4: acceleration years versus chronological age
   # -----------------------------
 
   p_vs_age <- ggplot(
     dat_plot,
-    aes(x = chronological_age, y = clock_acceleration_z, color = instance_label)
+    aes(x = chronological_age, y = clock_acceleration_years, color = instance_label)
   ) +
     geom_hline(yintercept = 0, linetype = "dashed", color = "grey40", linewidth = 0.7) +
     geom_point(alpha = 0.25, size = 0.8) +
@@ -1233,9 +1805,9 @@ run_one_organ <- function(organ_label) {
     scale_color_manual(values = instance_palette, name = "Instance") +
     labs(
       x = "Chronological age at metabolomics assessment (years)",
-      y = paste0(title_case(organ_clean), " metabolomics mortality-clock z-score"),
-      title = paste0(title_case(organ_clean), " metabolomics mortality-clock z-score versus chronological age"),
-      subtitle = "Dashed line indicates zero z-score acceleration"
+      y = paste0(title_case(organ_clean), " metabolomics mortality-clock acceleration years"),
+      title = paste0(title_case(organ_clean), " metabolomics mortality-clock acceleration years versus chronological age"),
+      subtitle = "Landmark groups defined by death/censoring after instance 1"
     ) +
     theme_classic(base_size = 13) +
     theme(
@@ -1245,14 +1817,14 @@ run_one_organ <- function(organ_label) {
     )
 
   ggsave(
-    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_z_vs_chronological_age_by_case_status.pdf")),
+    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_acceleration_years_vs_chronological_age_by_case_status.pdf")),
     p_vs_age,
     width = 13.5,
     height = 6.2
   )
 
   ggsave(
-    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_z_vs_chronological_age_by_case_status.png")),
+    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_acceleration_years_vs_chronological_age_by_case_status.png")),
     p_vs_age,
     width = 13.5,
     height = 6.2,
@@ -1273,32 +1845,36 @@ run_one_organ <- function(organ_label) {
 
   fwrite(
     annotation_tbl,
-    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_z_figure_annotation_text_by_group.tsv")),
+    file.path(outdir, paste0(organ_clean, "_metabolomics_mortality_acceleration_years_figure_annotation_text_by_group.tsv")),
     sep = "\t"
   )
 
   cat("\nFinished organ:", organ_label, "\n")
   cat("Output directory:\n", outdir, "\n\n")
   cat("Main outputs:\n")
-  cat("  ", paste0(organ_clean, "_metabolomics_mortality_z_common_population_long.tsv"), "\n")
-  cat("  ", paste0(organ_clean, "_metabolomics_mortality_z_plot_dataset_with_groups.tsv"), "\n")
-  cat("  ", paste0(organ_clean, "_metabolomics_mortality_z_instance_summary_by_group.tsv"), "\n")
-  cat("  ", paste0(organ_clean, "_metabolomics_mortality_z_common_population_wide_deltas_by_group.tsv"), "\n")
-  cat("  ", paste0(organ_clean, "_metabolomics_mortality_z_delta_summary_by_group.tsv"), "\n")
-  cat("  ", paste0(organ_clean, "_metabolomics_mortality_z_lmm_visit_order_trend_by_group.tsv"), "\n")
-  cat("  ", paste0(organ_clean, "_metabolomics_mortality_z_lmm_sample_year_trend_by_group.tsv"), "\n")
-  cat("  ", paste0(organ_clean, "_metabolomics_mortality_z_lmm_case_status_interaction.tsv"), "\n")
-  cat("  ", paste0(organ_clean, "_metabolomics_mortality_z_distribution_by_case_status.pdf/png"), "\n")
-  cat("  ", paste0(organ_clean, "_metabolomics_mortality_z_mean_trend_by_case_status.pdf/png"), "\n")
-  cat("  ", paste0(organ_clean, "_metabolomics_mortality_z_spaghetti_by_case_status.pdf/png"), "\n")
-  cat("  ", paste0(organ_clean, "_metabolomics_mortality_z_vs_chronological_age_by_case_status.pdf/png"), "\n\n")
+  cat("  ", paste0(organ_clean, "_metabolomics_mortality_landmark_case_status_from_instance1.tsv"), "\n")
+  cat("  ", paste0(organ_clean, "_metabolomics_mortality_acceleration_years_common_population_long.tsv"), "\n")
+  cat("  ", paste0(organ_clean, "_metabolomics_mortality_acceleration_years_plot_dataset_with_groups.tsv"), "\n")
+  cat("  ", paste0(organ_clean, "_metabolomics_mortality_acceleration_years_instance_summary_by_group.tsv"), "\n")
+  cat("  ", paste0(organ_clean, "_metabolomics_mortality_acceleration_years_common_population_wide_deltas_by_group.tsv"), "\n")
+  cat("  ", paste0(organ_clean, "_metabolomics_mortality_acceleration_years_delta_summary_by_group.tsv"), "\n")
+  cat("  ", paste0(organ_clean, "_metabolomics_mortality_acceleration_years_lmm_visit_order_trend_by_group.tsv"), "\n")
+  cat("  ", paste0(organ_clean, "_metabolomics_mortality_acceleration_years_lmm_sample_year_trend_by_group.tsv"), "\n")
+  cat("  ", paste0(organ_clean, "_metabolomics_mortality_acceleration_years_lmm_case_status_interaction.tsv"), "\n")
+  cat("  ", paste0(organ_clean, "_metabolomics_mortality_acceleration_years_distribution_by_case_status.pdf/png/svg"), "\n")
+  cat("  ", paste0(organ_clean, "_metabolomics_mortality_delta_acceleration_years_vs_baseline_age_by_case_status.pdf/png/svg"), "\n")
+  cat("  ", paste0(organ_clean, "_metabolomics_mortality_acceleration_years_mean_trend_by_case_status.pdf/png"), "\n")
+  cat("  ", paste0(organ_clean, "_metabolomics_mortality_acceleration_years_spaghetti_by_case_status.pdf/png"), "\n")
+  cat("  ", paste0(organ_clean, "_metabolomics_mortality_acceleration_years_vs_chronological_age_by_case_status.pdf/png"), "\n\n")
 
   invisible(list(
     dat_common = dat_common,
     dat_plot = dat_plot,
+    dat_wide = dat_wide,
     summary_tbl = summary_tbl,
     delta_summary_tbl = delta_summary_tbl,
-    lmm_tbl = lmm_tbl
+    lmm_tbl = lmm_tbl,
+    case_status_tbl = case_status_tbl
   ))
 }
 
@@ -1313,6 +1889,6 @@ for (organ_label in organ_labels) {
 }
 
 cat("\n============================================================\n")
-cat("Finished longitudinal metabolomics mortality-clock z-score acceleration analysis.\n")
+cat("Finished longitudinal metabolomics mortality-clock acceleration-years analysis.\n")
 cat("Main output directory:\n", main_outdir, "\n")
 cat("============================================================\n")
