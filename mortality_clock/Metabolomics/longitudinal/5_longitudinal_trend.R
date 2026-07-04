@@ -41,7 +41,7 @@ longitudinal_root <- "/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/m
 
 id_match_csv <- "/Users/hao/cubic-home/Dataset/UKBB_UMelbourne/UKB_UMelbourne_vs_Penn_match_key.csv"
 
-organ_labels <- c("Endocrine", "Digestive", "Hepatic", "Immune")
+organ_labels <- c("Endocrine", "Digestive", "Hepatic", 'Immune')
 organ_clean_vec <- tolower(organ_labels)
 names(organ_clean_vec) <- organ_labels
 
