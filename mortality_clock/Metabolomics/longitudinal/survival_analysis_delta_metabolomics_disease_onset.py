@@ -392,6 +392,27 @@ def read_one_delta_file(delta_root: str, organ_label: str, organ_clean: str, del
     })
 
     df = df.rename(columns=rename)
+
+    # IMPORTANT FIX:
+    # Preserve the selected delta variable under the common name expected by
+    # downstream Cox models: {organ}_delta_biomarker.
+    # The source delta column is also saved under an organ-specific QC name
+    # such as endocrine_delta_clock_age_years or endocrine_delta_accel_years.
+    # In the earlier version, the organ-specific rename could overwrite the
+    # selected-delta mapping, causing all results to return
+    # missing_delta_or_baseline_columns.
+    selected_delta_col = f"{organ_clean}_delta_biomarker"
+    if selected_delta_col not in df.columns:
+        if delta_column == "delta_clock_age_1_minus_0":
+            fallback_col = f"{organ_clean}_delta_clock_age_years"
+        elif delta_column == "delta_accel_years_1_minus_0":
+            fallback_col = f"{organ_clean}_delta_accel_years"
+        else:
+            fallback_col = ""
+
+        if fallback_col and fallback_col in df.columns:
+            df[selected_delta_col] = pd.to_numeric(df[fallback_col], errors="coerce")
+
     return df.drop_duplicates("participant_id", keep="first")
 
 

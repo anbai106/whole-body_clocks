@@ -46,7 +46,13 @@ echo "Output TSV: ${output_tsv}"
 echo "Runner: ${runner}"
 echo "OUT_DIR: ${out_dir}"
 
-if [[ ! -s "${output_tsv}" ]]; then
+force_rerun=${FORCE_RERUN:-1}
+
+if [[ "${force_rerun}" == "1" ]]; then
+  echo "FORCE_RERUN=1; overwriting existing output if present: ${output_tsv}"
+  rm -f "${output_tsv}"
+  bash "${runner}" "${endpoint}" "${output_tsv}"
+elif [[ ! -s "${output_tsv}" ]]; then
   bash "${runner}" "${endpoint}" "${output_tsv}"
 else
   echo "Output already exists and is non-empty; skipping: ${output_tsv}"
