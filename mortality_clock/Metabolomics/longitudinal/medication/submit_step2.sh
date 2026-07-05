@@ -29,7 +29,7 @@ echo "Outcome: ${outcome}"
 echo "Started at: $(date)"
 echo "============================================================"
 
-source activate survival_clock
+source activate DNE
 
 python "${python_script}" \
   --input_tsv "${input_tsv}" \
