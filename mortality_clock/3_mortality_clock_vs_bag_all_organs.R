@@ -4,7 +4,7 @@
 # MRI + proteomics + metabolomics mortality clocks
 # Generalized RStudio-ready direct-run script for 23 expected clocks
 # ============================================================
-
+.libPaths('/gpfs/fs001/cbica/home/wenju/R/x86_64-pc-linux-gnu-library/4.3')
 suppressPackageStartupMessages({
   library(tidyverse)
   library(glue)
@@ -17,7 +17,7 @@ suppressPackageStartupMessages({
 
 # The script automatically chooses the first existing root directory.
 clock_root_candidates <- c(
-  "/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock",
+  "/cbica/home/wenju/Reproducibile_paper/WholeBodyClock",
   "/cbica/home/wenju/Reproducibile_paper/WholeBodyClock",
   getwd()
 )
@@ -30,7 +30,7 @@ if (is.na(clock_root) || is.null(clock_root)) {
 # Aging-clock file(s). If multiple files exist, they are full-joined by participant_id.
 # MomoBAG.tsv is expected to contain MRIBAG/ProtBAG/MetBAG columns in your workflow.
 aging_clock_file_candidates <- c(
-  "/Users/hao/cubic-home/Reproducibile_paper/SleepAging/data/MomoBAG.tsv",
+  "/cbica/home/wenju/Reproducibile_paper/SleepAging/data/MomoBAG.tsv",
   "/cbica/home/wenju/Reproducibile_paper/SleepAging/data/MomoBAG.tsv",
   file.path(clock_root, "MomoBAG.tsv"),
   file.path(clock_root, "all_BAG.tsv"),

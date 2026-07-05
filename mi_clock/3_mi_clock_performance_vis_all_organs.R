@@ -18,7 +18,7 @@
 #     brain_mri_mi_clock_model_comparison.tsv
 #     brain_mri_mi_clock_incremental_value_delta_cindex.tsv
 # ============================================================
-
+.libPaths('/gpfs/fs001/cbica/home/wenju/R/x86_64-pc-linux-gnu-library/4.3')
 suppressPackageStartupMessages({
   library(tidyverse)
   library(survival)
@@ -33,7 +33,7 @@ suppressPackageStartupMessages({
 # ============================================================
 
 possible_base_dirs <- c(
-  "/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock",
+  "/cbica/home/wenju/Reproducibile_paper/WholeBodyClock",
   "/cbica/home/wenju/Reproducibile_paper/WholeBodyClock",
   getwd()
 )
