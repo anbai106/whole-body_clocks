@@ -8,7 +8,12 @@
 # Main plots:
 #   1) Forest plot of cluster beta vs No/minimal medication
 #   2) Adjusted mean delta clock age by medication cluster
-#   3) Heatmap of beta effects and FDR significance
+#   3) Heatmap of beta effects and Bonferroni/nominal significance
+#
+# Significance encoding in forest plot:
+#   Solid circle        = Bonferroni-significant, p_bonferroni < 0.05
+#   Light filled circle = nominal only, raw P < 0.05 but Bonferroni P >= 0.05
+#   Empty circle        = non-significant, raw P >= 0.05
 # ============================================================
 
 suppressPackageStartupMessages({
@@ -26,7 +31,7 @@ suppressPackageStartupMessages({
 
 results_dir <- "/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/mortality_clock/SA/delta_metabolomics_algorithmic_disease_onset/medication_cluster_delta_clock_lm_results"
 
-out_dir <- file.path(results_dir, "plots")
+out_dir <- file.path(results_dir, "plots_bonferroni")
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
 effects_tsv <- file.path(
@@ -87,8 +92,23 @@ cluster_palette <- c(
   "High polypharmacy cluster" = "#B65E16"
 )
 
+# Lighter versions for nominal-only signals
+cluster_palette_light <- c(
+  "No/minimal medication" = "#BDBDBD",
+  "Cardiometabolic medication cluster" = "#E7D48A",
+  "Respiratory medication cluster" = "#A9BCE3",
+  "Psychiatric/pain medication cluster" = "#A7C7AE",
+  "High polypharmacy cluster" = "#E2AA72"
+)
+
 plot_bg <- "#FFF9E8"
 strip_bg <- "#F3E7C8"
+
+sig_levels <- c(
+  "Bonferroni-significant",
+  "Nominal only",
+  "Not significant"
+)
 
 # -----------------------------
 # 3. Helper functions
@@ -143,8 +163,16 @@ if (file.exists(summaries_tsv)) {
 }
 
 # -----------------------------
-# 5. Clean fields
+# 5. Clean fields and define Bonferroni/nominal significance
 # -----------------------------
+
+if (!"p_bonferroni" %in% names(effects)) {
+  effects$p_bonferroni <- NA_real_
+}
+
+if (!"p_fdr_bh" %in% names(effects)) {
+  effects$p_fdr_bh <- NA_real_
+}
 
 effect_num_cols <- c(
   "N", "N_reference", "N_exposure", "beta", "se", "ci_lo", "ci_hi",
@@ -153,6 +181,12 @@ effect_num_cols <- c(
 
 for (cc in intersect(effect_num_cols, names(effects))) {
   effects[[cc]] <- safe_num(effects[[cc]])
+}
+
+# If p_bonferroni is missing, compute it across all status == ok tests.
+valid_p_idx <- which(effects$status == "ok" & !is.na(effects$p))
+if (length(valid_p_idx) > 0 && all(is.na(effects$p_bonferroni[valid_p_idx]))) {
+  effects$p_bonferroni[valid_p_idx] <- p.adjust(effects$p[valid_p_idx], method = "bonferroni")
 }
 
 mean_num_cols <- c(
@@ -174,28 +208,23 @@ effects_plot <- effects %>%
       exposure_cluster_short,
       levels = cluster_short[effect_cluster_order]
     ),
-    fdr_sig = !is.na(p_fdr_bh) & p_fdr_bh < 0.05,
+    
     bonf_sig = !is.na(p_bonferroni) & p_bonferroni < 0.05,
+    nominal_only = !bonf_sig & !is.na(p) & p < 0.05,
+    nonsig = is.na(p) | p >= 0.05,
+    
     sig_group = case_when(
-      bonf_sig ~ "Bonferroni < 0.05",
-      fdr_sig ~ "FDR < 0.05",
-      p < 0.05 ~ "Nominal P < 0.05",
+      bonf_sig ~ "Bonferroni-significant",
+      nominal_only ~ "Nominal only",
       TRUE ~ "Not significant"
     ),
-    sig_group = factor(
-      sig_group,
-      levels = c(
-        "Bonferroni < 0.05",
-        "FDR < 0.05",
-        "Nominal P < 0.05",
-        "Not significant"
-      )
-    ),
+    sig_group = factor(sig_group, levels = sig_levels),
+    
     annotation = paste0(
       "N=", comma(N_exposure),
       "; beta=", fmt_num(beta, 2),
       "; P=", fmt_p(p),
-      "; FDR=", fmt_p(p_fdr_bh)
+      "; Bonf P=", fmt_p(p_bonferroni)
     )
   )
 
@@ -216,7 +245,7 @@ means_plot <- means %>%
 
 fwrite(
   effects_plot,
-  file.path(out_dir, "medication_cluster_delta_clock_effects_for_plotting.tsv"),
+  file.path(out_dir, "medication_cluster_delta_clock_effects_for_plotting_bonferroni.tsv"),
   sep = "\t"
 )
 
@@ -226,21 +255,33 @@ fwrite(
   sep = "\t"
 )
 
+fwrite(
+  effects_plot %>% filter(bonf_sig),
+  file.path(out_dir, "bonferroni_significant_medication_cluster_delta_clock_effects.tsv"),
+  sep = "\t"
+)
+
+fwrite(
+  effects_plot %>% filter(nominal_only),
+  file.path(out_dir, "nominal_only_medication_cluster_delta_clock_effects.tsv"),
+  sep = "\t"
+)
+
 # -----------------------------
 # 7. Plot 1: Forest plot of beta effects
 # -----------------------------
 
 if (nrow(effects_plot) > 0) {
-
+  
   x_min <- min(effects_plot$ci_lo, na.rm = TRUE)
   x_max <- max(effects_plot$ci_hi, na.rm = TRUE)
   x_pad <- 0.18 * (x_max - x_min)
-
+  
   effects_plot <- effects_plot %>%
     mutate(
       x_text = x_max + 0.05 * (x_max - x_min)
     )
-
+  
   p_forest <- ggplot(
     effects_plot,
     aes(y = exposure_cluster_short)
@@ -261,16 +302,63 @@ if (nrow(effects_plot) > 0) {
       linewidth = 1.0,
       alpha = 0.95
     ) +
+    
+    # Bonferroni-significant: solid circle
     geom_point(
+      data = effects_plot %>% filter(sig_group == "Bonferroni-significant"),
+      aes(
+        x = beta,
+        color = exposure_cluster
+      ),
+      shape = 16,
+      size = 3.9,
+      stroke = 1.0,
+      show.legend = FALSE
+    ) +
+    
+    # Nominal-only: lighter filled circle
+    geom_point(
+      data = effects_plot %>% filter(sig_group == "Nominal only"),
       aes(
         x = beta,
         color = exposure_cluster,
-        fill = exposure_cluster,
+        fill = exposure_cluster
+      ),
+      shape = 21,
+      size = 3.7,
+      stroke = 1.1,
+      alpha = 0.55,
+      show.legend = FALSE
+    ) +
+    
+    # Non-significant: empty circle
+    geom_point(
+      data = effects_plot %>% filter(sig_group == "Not significant"),
+      aes(
+        x = beta,
+        color = exposure_cluster
+      ),
+      shape = 1,
+      size = 3.7,
+      stroke = 1.1,
+      show.legend = FALSE
+    ) +
+    
+    # Clean significance legend using shape only.
+    # drop = FALSE keeps all 3 categories even if one is absent in the data.
+    geom_point(
+      aes(
+        x = beta,
         shape = sig_group
       ),
-      size = 3.4,
-      stroke = 1.0
+      color = "#333333",
+      fill = "#BDBDBD",
+      size = 3.6,
+      stroke = 1.0,
+      alpha = 0,
+      show.legend = TRUE
     ) +
+    
     geom_text(
       aes(
         x = x_text,
@@ -291,20 +379,31 @@ if (nrow(effects_plot) > 0) {
       name = "Medication cluster"
     ) +
     scale_fill_manual(
-      values = cluster_palette,
+      values = cluster_palette_light,
       name = "Medication cluster"
     ) +
     scale_shape_manual(
       values = c(
-        "Bonferroni < 0.05" = 23,
-        "FDR < 0.05" = 21,
-        "Nominal P < 0.05" = 21,
+        "Bonferroni-significant" = 16,
+        "Nominal only" = 21,
         "Not significant" = 1
       ),
+      breaks = sig_levels,
+      drop = FALSE,
       name = "Significance"
     ) +
+    guides(
+      shape = guide_legend(
+        override.aes = list(
+          alpha = 1,
+          color = "#333333",
+          fill = "#BDBDBD",
+          size = 3.8
+        )
+      )
+    ) +
     coord_cartesian(
-      xlim = c(x_min - x_pad, x_max + 2.1 * x_pad),
+      xlim = c(x_min - x_pad, x_max + 2.4 * x_pad),
       clip = "off"
     ) +
     labs(
@@ -315,8 +414,8 @@ if (nrow(effects_plot) > 0) {
       y = NULL,
       title = "Medication clusters and longitudinal metabolomics mortality-clock change",
       subtitle = paste0(
-        "Linear models adjusted for baseline clock acceleration, chronological age, sex, ",
-        "smoking, BMI, blood pressure, and chronological age change"
+        "Solid = Bonferroni-significant; light-filled = nominal only; empty = not significant. ",
+        "Models adjusted for baseline clock acceleration, chronological age, sex, smoking, BMI, BP, and age change."
       )
     ) +
     theme_classic(base_size = 13) +
@@ -328,33 +427,33 @@ if (nrow(effects_plot) > 0) {
       strip.background = element_rect(fill = strip_bg, color = NA),
       strip.text = element_text(face = "bold", size = 12, hjust = 0),
       plot.title = element_text(face = "bold", size = 15),
-      plot.subtitle = element_text(size = 11),
+      plot.subtitle = element_text(size = 10.5),
       axis.text.y = element_text(face = "bold", size = 10),
       axis.title.x = element_text(size = 12),
       legend.position = "bottom",
       legend.box = "vertical",
-      plot.margin = margin(10, 185, 10, 10)
+      plot.margin = margin(10, 205, 10, 10)
     )
-
+  
   ggsave(
-    file.path(out_dir, "medication_cluster_delta_clock_beta_forest_plot.pdf"),
+    file.path(out_dir, "medication_cluster_delta_clock_beta_forest_plot_bonferroni.pdf"),
     p_forest,
-    width = 13.5,
+    width = 14.8,
     height = 7.8
   )
-
+  
   ggsave(
-    file.path(out_dir, "medication_cluster_delta_clock_beta_forest_plot.png"),
+    file.path(out_dir, "medication_cluster_delta_clock_beta_forest_plot_bonferroni.png"),
     p_forest,
-    width = 13.5,
+    width = 14.8,
     height = 7.8,
     dpi = 300
   )
-
+  
   ggsave(
-    file.path(out_dir, "medication_cluster_delta_clock_beta_forest_plot.svg"),
+    file.path(out_dir, "medication_cluster_delta_clock_beta_forest_plot_bonferroni.svg"),
     p_forest,
-    width = 13.5,
+    width = 14.8,
     height = 7.8
   )
 }
@@ -364,7 +463,7 @@ if (nrow(effects_plot) > 0) {
 # -----------------------------
 
 if (nrow(means_plot) > 0) {
-
+  
   p_means <- ggplot(
     means_plot,
     aes(
@@ -408,7 +507,7 @@ if (nrow(means_plot) > 0) {
       scales = "free_y"
     ) +
     scale_color_manual(values = cluster_palette, guide = "none") +
-    scale_fill_manual(values = cluster_palette, guide = "none") +
+    scale_fill_manual(values = cluster_palette_light, guide = "none") +
     labs(
       x = NULL,
       y = "Adjusted mean delta clock age years",
@@ -430,14 +529,14 @@ if (nrow(means_plot) > 0) {
       axis.title.y = element_text(size = 12),
       plot.margin = margin(10, 10, 10, 10)
     )
-
+  
   ggsave(
     file.path(out_dir, "medication_cluster_delta_clock_adjusted_means.pdf"),
     p_means,
     width = 11.5,
     height = 7.8
   )
-
+  
   ggsave(
     file.path(out_dir, "medication_cluster_delta_clock_adjusted_means.png"),
     p_means,
@@ -445,7 +544,7 @@ if (nrow(means_plot) > 0) {
     height = 7.8,
     dpi = 300
   )
-
+  
   ggsave(
     file.path(out_dir, "medication_cluster_delta_clock_adjusted_means.svg"),
     p_means,
@@ -459,20 +558,21 @@ if (nrow(means_plot) > 0) {
 # -----------------------------
 
 if (nrow(effects_plot) > 0) {
-
+  
   heat_tbl <- effects_plot %>%
     mutate(
       beta_label = paste0(
         fmt_num(beta, 2),
-        "\nFDR=", fmt_p(p_fdr_bh)
+        "\nBonf=", fmt_p(p_bonferroni)
       ),
-      star = case_when(
-        bonf_sig ~ "**",
-        fdr_sig ~ "*",
-        TRUE ~ ""
-      )
+      sig_symbol = case_when(
+        bonf_sig ~ "\u25CF",        # solid circle
+        nominal_only ~ "\u25D0",    # half-filled circle approximation
+        TRUE ~ "\u25CB"             # empty circle
+      ),
+      heat_label = paste0(beta_label, "\n", sig_symbol)
     )
-
+  
   p_heat <- ggplot(
     heat_tbl,
     aes(
@@ -483,7 +583,7 @@ if (nrow(effects_plot) > 0) {
   ) +
     geom_tile(color = plot_bg, linewidth = 0.9) +
     geom_text(
-      aes(label = paste0(beta_label, star)),
+      aes(label = heat_label),
       size = 3.0,
       lineheight = 0.88,
       color = "#1F1F1F"
@@ -499,7 +599,7 @@ if (nrow(effects_plot) > 0) {
       x = NULL,
       y = NULL,
       title = "Medication-cluster effects on delta metabolomics mortality-clock age",
-      subtitle = "Values are adjusted beta coefficients versus no/minimal medication; * FDR < 0.05; ** Bonferroni < 0.05"
+      subtitle = "\u25CF Bonferroni-significant; \u25D0 nominal only; \u25CB not significant"
     ) +
     theme_classic(base_size = 13) +
     theme(
@@ -511,24 +611,24 @@ if (nrow(effects_plot) > 0) {
       axis.text.y = element_text(face = "bold", size = 10),
       legend.position = "right"
     )
-
+  
   ggsave(
-    file.path(out_dir, "medication_cluster_delta_clock_beta_heatmap.pdf"),
+    file.path(out_dir, "medication_cluster_delta_clock_beta_heatmap_bonferroni.pdf"),
     p_heat,
     width = 9.2,
     height = 5.2
   )
-
+  
   ggsave(
-    file.path(out_dir, "medication_cluster_delta_clock_beta_heatmap.png"),
+    file.path(out_dir, "medication_cluster_delta_clock_beta_heatmap_bonferroni.png"),
     p_heat,
     width = 9.2,
     height = 5.2,
     dpi = 300
   )
-
+  
   ggsave(
-    file.path(out_dir, "medication_cluster_delta_clock_beta_heatmap.svg"),
+    file.path(out_dir, "medication_cluster_delta_clock_beta_heatmap_bonferroni.svg"),
     p_heat,
     width = 9.2,
     height = 5.2
@@ -540,15 +640,15 @@ if (nrow(effects_plot) > 0) {
 # -----------------------------
 
 cat("\n============================================================\n")
-cat("Finished medication-cluster delta-clock plots.\n")
+cat("Finished Bonferroni-coded medication-cluster delta-clock plots.\n")
 cat("Input results directory:\n", results_dir, "\n\n")
 cat("Output plot directory:\n", out_dir, "\n\n")
 
-cat("FDR-significant signals:\n")
+cat("Bonferroni-significant signals:\n")
 print(
   effects_plot %>%
-    filter(!is.na(p_fdr_bh), p_fdr_bh < 0.05) %>%
-    arrange(p_fdr_bh) %>%
+    filter(bonf_sig) %>%
+    arrange(p_bonferroni) %>%
     select(
       organ_label,
       exposure_cluster,
@@ -558,7 +658,24 @@ print(
       ci_lo,
       ci_hi,
       p,
-      p_fdr_bh,
+      p_bonferroni
+    )
+)
+
+cat("\nNominal-only signals:\n")
+print(
+  effects_plot %>%
+    filter(nominal_only) %>%
+    arrange(p) %>%
+    select(
+      organ_label,
+      exposure_cluster,
+      N,
+      N_exposure,
+      beta,
+      ci_lo,
+      ci_hi,
+      p,
       p_bonferroni
     )
 )
