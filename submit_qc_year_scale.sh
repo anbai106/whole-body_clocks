@@ -10,6 +10,6 @@ module load python/anaconda/3
 
 source activate DNE
 
-python /cbica/home/wenju/Project/Project/whole-body_clocks/qc_year_scale.py
+python /cbica/home/wenju/Project/whole-body_clocks/qc_year_scale.py
 
 conda deactivate
