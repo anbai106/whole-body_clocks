@@ -857,7 +857,7 @@ def run_lepoch_year_scale_qc(
     ----------
     base_dir:
         Directory containing clock folders.
-        Example: /Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock
+        Example: /cbica/home/wenju/Reproducibile_paper/WholeBodyClock
 
     clock_dir_glob:
         Glob pattern relative to base_dir.
@@ -1100,53 +1100,53 @@ def run_lepoch_year_scale_qc(
 if __name__ == "__main__":
     # Example 1: MI L'EPOCH clocks
     run_lepoch_year_scale_qc(
-        base_dir="/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock",
+        base_dir="/cbica/home/wenju/Reproducibile_paper/WholeBodyClock",
         clock_dir_glob="*_mi_clock",
         analysis_label="mi",
-        out_dir="/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/mi_lepoch_year_scale_qc",
+        out_dir="/cbica/home/wenju/Reproducibile_paper/WholeBodyClock/mi_lepoch_year_scale_qc",
     )
 
     # Example 2: COPD L'EPOCH clocks
     # Uncomment to run:
     run_lepoch_year_scale_qc(
-        base_dir="/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock",
+        base_dir="/cbica/home/wenju/Reproducibile_paper/WholeBodyClock",
         clock_dir_glob="*_copd_clock",
         analysis_label="copd",
-        out_dir="/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/copd_lepoch_year_scale_qc",
+        out_dir="/cbica/home/wenju/Reproducibile_paper/WholeBodyClock/copd_lepoch_year_scale_qc",
     )
 
     # Example 3: Dementia L'EPOCH clocks
     # Uncomment to run:
     run_lepoch_year_scale_qc(
-        base_dir="/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock",
+        base_dir="/cbica/home/wenju/Reproducibile_paper/WholeBodyClock",
         clock_dir_glob="*_dementia_clock",
         analysis_label="dementia",
-        out_dir="/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/dementia_lepoch_year_scale_qc",
+        out_dir="/cbica/home/wenju/Reproducibile_paper/WholeBodyClock/dementia_lepoch_year_scale_qc",
     )
 
     # Example 3: Asthma L'EPOCH clocks
     # Uncomment to run:
     run_lepoch_year_scale_qc(
-        base_dir="/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock",
+        base_dir="/cbica/home/wenju/Reproducibile_paper/WholeBodyClock",
         clock_dir_glob="*_asthma_clock",
         analysis_label="asthma",
-        out_dir="/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/asthma_lepoch_year_scale_qc",
+        out_dir="/cbica/home/wenju/Reproducibile_paper/WholeBodyClock/asthma_lepoch_year_scale_qc",
     )
 
     # Example 3: Stroke L'EPOCH clocks
     # Uncomment to run:
     run_lepoch_year_scale_qc(
-        base_dir="/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock",
+        base_dir="/cbica/home/wenju/Reproducibile_paper/WholeBodyClock",
         clock_dir_glob="*_stroke_clock",
         analysis_label="stroke",
-        out_dir="/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/asthma_lepoch_year_scale_qc",
+        out_dir="/cbica/home/wenju/Reproducibile_paper/WholeBodyClock/asthma_lepoch_year_scale_qc",
     )
 
     # Example 4: mortality clocks
     # Uncomment to run:
     run_lepoch_year_scale_qc(
-        base_dir="/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock",
+        base_dir="/cbica/home/wenju/Reproducibile_paper/WholeBodyClock",
         clock_dir_glob="*_mortality_clock",
         analysis_label="mortality",
-        out_dir="/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/mortality_year_scale_qc",
+        out_dir="/cbica/home/wenju/Reproducibile_paper/WholeBodyClock/mortality_year_scale_qc",
     )
