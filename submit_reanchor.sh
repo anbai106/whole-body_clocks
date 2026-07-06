@@ -19,8 +19,7 @@ echo "============================================================"
 # 1. Environment
 # -----------------------------
 
-source ~/.bashrc || true
-conda activate survival_clock
+source activate survival_clock
 
 # -----------------------------
 # 2. Paths
