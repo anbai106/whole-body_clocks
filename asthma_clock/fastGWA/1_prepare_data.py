@@ -97,7 +97,7 @@ for organ in ['Reproductive_female', 'Hepatic', 'Endocrine', 'Immune']:
     prepare_data(df_data, cov_tsv, output_dir, fastgwa_fam)
 
 ### 5 metabolomics asthma clock
-for organ in ['Endocrine', 'Digestive', 'Hepatic', 'Immune']:
+for organ in ['Endocrine', 'Digestive', 'Hepatic', 'Immune', 'Metabolic']:
     organ_small = organ.lower()
     df_data.rename({disease + '_' + organ_small + '_metabolomics_' + disease + '_clock_acceleration_z': 'EPOCH'}, axis=1, inplace=True)
     cov_tsv = '/cbica/home/wenju/Reproducibile_paper/PRS_UKBB/prediction/data/UKBB_fullsample_covariate.csv'

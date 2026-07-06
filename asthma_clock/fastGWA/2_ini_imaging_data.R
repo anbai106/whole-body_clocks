@@ -27,15 +27,15 @@ lm_imaging_data <- function(data_src, cov_src, output_dir_final){
 }
 
 ### 4 MetBAG
-# organ_list = c('Endocrine', 'Digestive', 'Hepatic', 'Immune')
-# output_dir = '/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/mortality_clock/fastGWA/data'
-# 
-# for (organ in organ_list) {
-#   output_dir_final <- paste(output_dir, paste0(organ, "_metabolomics_mortality_clock"), sep = "/")
-#   data_src = paste(output_dir_final, 'EPOCH_pheno.txt', sep='/')
-#   cov_src = paste(output_dir_final, 'EPOCH_cov.txt', sep='/')
-#   lm_imaging_data(data_src, cov_src, output_dir_final)
-# }
+organ_list = c('Endocrine', 'Digestive', 'Hepatic', 'Immune')
+output_dir = '/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/mortality_clock/fastGWA/data'
+
+for (organ in organ_list) {
+  output_dir_final <- paste(output_dir, paste0(organ, "_metabolomics_mortality_clock"), sep = "/")
+  data_src = paste(output_dir_final, 'EPOCH_pheno.txt', sep='/')
+  cov_src = paste(output_dir_final, 'EPOCH_cov.txt', sep='/')
+  lm_imaging_data(data_src, cov_src, output_dir_final)
+}
 
 ### 11 ProtBAG
 organ_list = c('Reproductive_female', 'Pulmonary', 'Heart', 'Brain', 'Eye', 'Hepatic', 'Renal', 'Reproductive_male', 'Endocrine', 'Immune', 'Skin')
