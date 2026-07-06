@@ -291,8 +291,8 @@ if [[ ! -f "${TASKS_TSV}" ]]; then
   exit 1
 fi
 
-source ~/.bashrc || true
-conda activate "${CONDA_ENV}" || true
+
+source activate survival
 
 EXTRA_ARGS=()
 
