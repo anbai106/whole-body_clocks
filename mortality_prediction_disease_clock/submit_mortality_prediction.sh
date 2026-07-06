@@ -38,7 +38,7 @@ GOOD_CLOCK_TSV="${GOOD_CLOCK_TSV:-${ANALYSIS_DIR}/all_disease_lepoch_main_text_g
 
 TASKS_TSV="${TASKS_TSV:-${ANALYSIS_DIR}/mortality_survival_47_stable_significant_clock_tasks.tsv}"
 
-PY_SCRIPT="${PY_SCRIPT:-${BASE_DIR}/run_one_disease_clock_mortality_survival.py}"
+PY_SCRIPT=/cbica/home/wenju/Project/whole-body_clocks/mortality_prediction_disease_clock/mortality_prediction.py
 
 DEATH_XLSX="${DEATH_XLSX:-/cbica/home/wenju/Dataset/UKBB_UMelbourne/Death_related_var_from_Ye.xlsx}"
 
