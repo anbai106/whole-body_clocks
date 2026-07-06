@@ -1139,7 +1139,7 @@ if __name__ == "__main__":
         base_dir="/cbica/home/wenju/Reproducibile_paper/WholeBodyClock",
         clock_dir_glob="*_stroke_clock",
         analysis_label="stroke",
-        out_dir="/cbica/home/wenju/Reproducibile_paper/WholeBodyClock/asthma_lepoch_year_scale_qc",
+        out_dir="/cbica/home/wenju/Reproducibile_paper/WholeBodyClock/stroke_lepoch_year_scale_qc",
     )
 
     # Example 4: mortality clocks
