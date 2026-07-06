@@ -4,6 +4,12 @@
 #
 # Python 3.7/3.8/3.9 compatible version
 #
+# Main fix:
+#   - Output score columns now use single underscores:
+#       asthma_spleen_mri_clock_acceleration_z
+#     instead of:
+#       asthma__spleen_mri__clock_acceleration_z
+#
 # Input:
 #   1. Good-clock table from the R plotting script:
 #      <base_dir>/all_disease_lepoch_incremental_value_scale_qc/
@@ -18,14 +24,14 @@
 # Output:
 #   <base_dir>/all_disease_lepoch_incremental_value_scale_qc/
 #      stable_significant_disease_clock_acceleration_z_wide.tsv
-#      stable_significant_disease_clock_acceleration_z_long.tsv
+#      stable_significant_disease_clock_acceleration_z_long_format.tsv
 #      stable_significant_disease_clock_acceleration_z_metadata.tsv
 #
 # Purpose:
 #   Collect *_clock_acceleration_z for clocks that are:
 #      significant positive M3-M1 AND stable year-scale QC
 #
-# Example:
+# Recommended run:
 #   python collect_stable_significant_disease_clock_scores.py \
 #     --base_dir /cbica/home/wenju/Reproducibile_paper/WholeBodyClock \
 #     --no_long
@@ -37,7 +43,7 @@ import argparse
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
 import pandas as pd
 
@@ -282,14 +288,26 @@ def get_required_col(df, candidates, name):
 
 def make_safe_disease_value(x):
     # type: (Any) -> str
-    return str(x).strip().lower()
+    return clean_for_column_name(str(x).strip().lower())
 
 
 def make_score_output_column(disease, clock_label):
     # type: (str, str) -> str
-    return "{}__{}__clock_acceleration_z".format(
-        clean_for_column_name(disease),
-        clean_for_column_name(clock_label),
+    """
+    Fixed naming convention:
+      asthma_spleen_mri_clock_acceleration_z
+      dementia_brain_proteomics_clock_acceleration_z
+      mi_endocrine_metabolomics_clock_acceleration_z
+
+    Previous version used:
+      asthma__spleen_mri__clock_acceleration_z
+    """
+    disease_clean = clean_for_column_name(disease)
+    clock_clean = clean_for_column_name(clock_label)
+
+    return "{}_{}_clock_acceleration_z".format(
+        disease_clean,
+        clock_clean,
     )
 
 
@@ -307,8 +325,10 @@ def drop_duplicate_ids(df, id_col, score_col, prediction_file):
         "Keeping the first non-missing score per participant.".format(prediction_file)
     )
 
-    df = df.sort_values(by=[id_col, score_col], na_position="last")
+    df["_score_is_missing_tmp"] = df[score_col].isna().astype(int)
+    df = df.sort_values(by=[id_col, "_score_is_missing_tmp"])
     df = df.drop_duplicates(subset=[id_col], keep="first")
+    df = df.drop(columns=["_score_is_missing_tmp"])
     return df
 
 
