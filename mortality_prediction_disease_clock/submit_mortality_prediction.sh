@@ -4,7 +4,7 @@
 #SBATCH --mem-per-cpu=24G
 #SBATCH --cpus-per-task=1
 #SBATCH --time=12:00:00
-#SBATCH --array=0-46%12
+#SBATCH --array=0-46
 #SBATCH --output=/cbica/home/wenju/output/disease_clock_mortality_%A_%a.out
 #SBATCH --error=/cbica/home/wenju/output/disease_clock_mortality_%A_%a.err
 
@@ -102,7 +102,10 @@ def infer_modality(folder, modality):
     return str(modality)
 
 def make_score_col(disease, clock_label):
-    return "{}_{}_clock_acceleration_z".format(clean_col(disease), clean_col(clock_label))
+    return "{}_{}_clock_acceleration_z".format(
+        clean_col(disease),
+        clean_col(clock_label)
+    )
 
 if not metadata_tsv.exists():
     raise FileNotFoundError("Missing metadata TSV: {}".format(metadata_tsv))
@@ -126,8 +129,10 @@ if good_tsv.exists():
         good_key = good[["disease", "folder"]].drop_duplicates()
         good_key["disease"] = good_key["disease"].astype(str).str.lower()
         good_key["folder"] = good_key["folder"].astype(str)
+
         meta["disease"] = meta["disease"].astype(str).str.lower()
         meta["folder"] = meta["folder"].astype(str)
+
         meta = meta.merge(good_key, on=["disease", "folder"], how="inner")
 
 required = ["disease", "folder"]
@@ -151,6 +156,7 @@ for _, r in meta.drop_duplicates(subset=["disease", "folder"]).iterrows():
     if "score_col_wide" in meta.columns and pd.notna(r["score_col_wide"]):
         candidate = str(r["score_col_wide"])
         candidate_single = candidate.replace("__", "_")
+
         if candidate in wide_cols:
             score_col = candidate
         elif candidate_single in wide_cols:
@@ -164,7 +170,9 @@ for _, r in meta.drop_duplicates(subset=["disease", "folder"]).iterrows():
     if score_col is None:
         print(
             "WARNING: could not find score column for disease={} folder={} clock_label={}".format(
-                disease, folder, clock_label
+                disease,
+                folder,
+                clock_label
             ),
             file=sys.stderr,
         )
@@ -291,10 +299,17 @@ if [[ ! -f "${TASKS_TSV}" ]]; then
   exit 1
 fi
 
+source ~/.bashrc || true
+conda activate "${CONDA_ENV}" || true
 
-source activate survival
-
-EXTRA_ARGS=()
+# ------------------------------------------------------------
+# Critical fix:
+# Declare the array, then use safe expansion later:
+#   ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
+# This avoids the Bash set -u error:
+#   EXTRA_ARGS[@]: unbound variable
+# ------------------------------------------------------------
+declare -a EXTRA_ARGS=()
 
 if [[ -n "${FIELD53_0_COL}" ]]; then
   EXTRA_ARGS+=(--field53-0-col "${FIELD53_0_COL}")
@@ -338,7 +353,7 @@ python "${PY_SCRIPT}" \
   --covariate-csv "${COVARIATE_CSV}" \
   --admin-censor-date "${ADMIN_CENSOR_DATE}" \
   --penalizer "${PENALIZER}" \
-  "${EXTRA_ARGS[@]}"
+  ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
 
 echo "============================================================"
 echo "Finished task ${SLURM_ARRAY_TASK_ID}"
