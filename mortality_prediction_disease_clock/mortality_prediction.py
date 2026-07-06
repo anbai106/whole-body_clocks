@@ -9,6 +9,18 @@
 #
 # Field 53 is read from the Melbourne death-related file.
 #
+# Default covariates:
+#   age at assessment, sex, genetic ethnic grouping,
+#   assessment center, smoking status, BMI,
+#   mean diastolic BP, mean systolic BP
+#
+# Important revision:
+#   - Genetic PCs are NOT included by default.
+#   - Smoking, BMI, diastolic BP, and systolic BP are added.
+#   - Instance-specific covariates are used:
+#       MRI: 2_0
+#       Proteomics/metabolomics: 0_0
+#
 # Output:
 #   <BASE_DIR>/<clock_folder>/survival_analysis_mortality/
 # ============================================================
@@ -19,7 +31,7 @@ import argparse
 import re
 import sys
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -447,7 +459,17 @@ def detect_first_matching_col(df, patterns):
     return None
 
 
+def exact_or_none(df, col):
+    if col in df.columns:
+        return col
+    return None
+
+
 def detect_age_col(cov_df, instance):
+    preferred = "age_when_attended_assessment_centre_f21003_{}_0".format(instance)
+    if preferred in cov_df.columns:
+        return preferred
+
     primary_patterns = [
         r"21003.*{}.*0".format(instance),
         r"f[._-]?21003[._-]?{}[._-]?0".format(instance),
@@ -481,109 +503,236 @@ def detect_age_col(cov_df, instance):
     return None
 
 
-def detect_pc_cols(cov_df, max_pcs=10):
-    out = []
+def add_mean_column(cov_df, new_col, source_cols):
+    existing = [c for c in source_cols if c in cov_df.columns]
 
-    for k in range(1, max_pcs + 1):
-        patterns = [
-            r"^pc{}$".format(k),
-            r"genetic.*pc{}$".format(k),
-            r"principal.*component.*{}$".format(k),
-            r"22009.*{}$".format(k),
-            r"f[._-]?22009[._-]?0[._-]?{}$".format(k),
-        ]
+    if len(existing) == 0:
+        return cov_df, None, ""
 
-        hit = detect_first_matching_col(cov_df, patterns)
-        if hit is not None and hit not in out:
-            out.append(hit)
+    vals = []
+    for c in existing:
+        vals.append(pd.to_numeric(cov_df[c], errors="coerce"))
 
-    return out
+    mat = pd.concat(vals, axis=1)
+    cov_df[new_col] = mat.mean(axis=1, skipna=True)
+
+    return cov_df, new_col, ";".join(existing)
 
 
 def select_common_covariates(cov_df, instance, covariate_cols_arg=None):
+    """
+    Default clinical covariates for mortality prediction.
+
+    Revised default:
+      - age at assessment, instance-specific
+      - sex
+      - genetic ethnic grouping
+      - assessment center, instance-specific
+      - smoking status, instance-specific
+      - BMI, instance-specific
+      - mean diastolic BP, instance-specific
+      - mean systolic BP, instance-specific
+
+    Genetic PCs are intentionally excluded by default.
+
+    If --covariate-cols is supplied, the user-specified list is used exactly.
+    """
+
+    cov_df = cov_df.copy()
+
     if covariate_cols_arg is not None and covariate_cols_arg.strip() != "":
         cols = [x.strip() for x in covariate_cols_arg.split(",") if x.strip() != ""]
         missing = [x for x in cols if x not in cov_df.columns]
         if len(missing) > 0:
             raise ValueError("Requested covariates not found: {}".format(missing))
-        return cols
+
+        source_desc = "User-specified covariates: {}".format(";".join(cols))
+        return cov_df, cols, source_desc
 
     selected = []
+    source_records = []
 
+    # 1. Age at assessment, instance-specific.
     age_col = detect_age_col(cov_df, instance)
     if age_col is not None:
         selected.append(age_col)
+        source_records.append("Age={}".format(age_col))
     else:
         warn("Age covariate was not auto-detected.")
 
-    sex_col = detect_first_matching_col(
-        cov_df,
-        [
-            r"^sex$",
-            r"31.*0.*0",
-            r"genetic_sex",
-            r"reported_sex",
-        ],
-    )
+    # 2. Sex.
+    sex_col = exact_or_none(cov_df, "sex_f31_0_0")
+    if sex_col is None:
+        sex_col = detect_first_matching_col(
+            cov_df,
+            [
+                r"^sex$",
+                r"31.*0.*0",
+                r"genetic_sex",
+                r"reported_sex",
+            ],
+        )
+
     if sex_col is not None:
         selected.append(sex_col)
+        source_records.append("Sex={}".format(sex_col))
     else:
         warn("Sex covariate was not auto-detected.")
 
-    ethnicity_col = detect_first_matching_col(
-        cov_df,
-        [
-            r"ethnic",
-            r"race",
-            r"21000",
-        ],
-    )
+    # 3. Genetic ethnic grouping.
+    ethnicity_col = exact_or_none(cov_df, "genetic_ethnic_grouping_f22006_0_0")
+    if ethnicity_col is None:
+        ethnicity_col = detect_first_matching_col(
+            cov_df,
+            [
+                r"genetic_ethnic_grouping",
+                r"ethnic",
+                r"race",
+                r"21000",
+            ],
+        )
+
     if ethnicity_col is not None:
         selected.append(ethnicity_col)
+        source_records.append("Ethnicity={}".format(ethnicity_col))
+    else:
+        warn("Ethnicity covariate was not auto-detected.")
 
-    assessment_center_col = detect_first_matching_col(
+    # 4. Assessment center, instance-specific.
+    assessment_center_col = exact_or_none(
         cov_df,
-        [
-            r"54.*{}.*0".format(instance),
-            r"assessment.*center",
-            r"assessment.*centre",
-            r"assessment_center",
-            r"assessment_centre",
-        ],
+        "uk_biobank_assessment_centre_f54_{}_0".format(instance),
     )
+    if assessment_center_col is None:
+        assessment_center_col = detect_first_matching_col(
+            cov_df,
+            [
+                r"54.*{}.*0".format(instance),
+                r"assessment.*center",
+                r"assessment.*centre",
+                r"assessment_center",
+                r"assessment_centre",
+            ],
+        )
+
     if assessment_center_col is not None:
         selected.append(assessment_center_col)
+        source_records.append("Assessment_center={}".format(assessment_center_col))
+    else:
+        warn("Assessment center covariate was not auto-detected.")
 
-    genotype_array_col = detect_first_matching_col(
+    # 5. Smoking status, instance-specific.
+    smoking_col = exact_or_none(
         cov_df,
-        [
-            r"genotype.*array",
-            r"genotyping.*array",
-            r"22000",
-        ],
+        "smoking_status_f20116_{}_0".format(instance),
     )
-    if genotype_array_col is not None:
-        selected.append(genotype_array_col)
+    if smoking_col is None:
+        smoking_col = detect_first_matching_col(
+            cov_df,
+            [
+                r"smoking_status.*{}.*0".format(instance),
+                r"20116.*{}.*0".format(instance),
+                r"smoking",
+            ],
+        )
 
-    townsend_col = detect_first_matching_col(
+    if smoking_col is not None:
+        selected.append(smoking_col)
+        source_records.append("Smoking={}".format(smoking_col))
+    else:
+        warn("Smoking-status covariate was not auto-detected.")
+
+    # 6. BMI, instance-specific.
+    bmi_col = exact_or_none(
         cov_df,
-        [
-            r"townsend",
-            r"189",
-        ],
+        "body_mass_index_bmi_f23104_{}_0".format(instance),
     )
-    if townsend_col is not None:
-        selected.append(townsend_col)
+    if bmi_col is None:
+        bmi_col = detect_first_matching_col(
+            cov_df,
+            [
+                r"body_mass_index.*{}.*0".format(instance),
+                r"bmi.*{}.*0".format(instance),
+                r"23104.*{}.*0".format(instance),
+                r"body_mass_index",
+                r"bmi",
+            ],
+        )
 
-    pc_cols = detect_pc_cols(cov_df, max_pcs=10)
-    selected.extend(pc_cols)
+    if bmi_col is not None:
+        selected.append(bmi_col)
+        source_records.append("BMI={}".format(bmi_col))
+    else:
+        warn("BMI covariate was not auto-detected.")
 
+    # 7. Mean diastolic BP, instance-specific.
+    diastolic_source_cols = [
+        "diastolic_blood_pressure_automated_reading_f4079_{}_0".format(instance),
+        "diastolic_blood_pressure_automated_reading_f4079_{}_1".format(instance),
+    ]
+    diastolic_mean_col = "diastolic_blood_pressure_mean_f4079_{}".format(instance)
+
+    cov_df, diastolic_col, diastolic_sources = add_mean_column(
+        cov_df,
+        diastolic_mean_col,
+        diastolic_source_cols,
+    )
+
+    if diastolic_col is not None:
+        selected.append(diastolic_col)
+        source_records.append("Diastolic_mean={}".format(diastolic_sources))
+    else:
+        warn(
+            "Diastolic BP covariate was not detected for instance {}. "
+            "Expected one of: {}".format(instance, diastolic_source_cols)
+        )
+
+    # 8. Mean systolic BP, instance-specific.
+    systolic_source_cols = [
+        "systolic_blood_pressure_automated_reading_f4080_{}_0".format(instance),
+        "systolic_blood_pressure_automated_reading_f4080_{}_1".format(instance),
+    ]
+    systolic_mean_col = "systolic_blood_pressure_mean_f4080_{}".format(instance)
+
+    cov_df, systolic_col, systolic_sources = add_mean_column(
+        cov_df,
+        systolic_mean_col,
+        systolic_source_cols,
+    )
+
+    if systolic_col is not None:
+        selected.append(systolic_col)
+        source_records.append("Systolic_mean={}".format(systolic_sources))
+    else:
+        warn(
+            "Systolic BP covariate was not detected for instance {}. "
+            "Expected one of: {}".format(instance, systolic_source_cols)
+        )
+
+    # De-duplicate while preserving order.
     out = []
     for c in selected:
         if c in cov_df.columns and c not in out:
             out.append(c)
 
-    return out
+    source_desc = "; ".join(source_records)
+
+    return cov_df, out, source_desc
+
+
+def force_categorical_covariate(col):
+    low = str(col).lower()
+
+    categorical_patterns = [
+        "sex",
+        "genetic_ethnic_grouping",
+        "ethnic_background",
+        "assessment_centre",
+        "assessment_center",
+        "smoking_status",
+    ]
+
+    return any(pat in low for pat in categorical_patterns)
 
 
 def preprocess_design_matrix(df, duration_col, event_col, clock_col, covariate_cols):
@@ -612,6 +761,23 @@ def preprocess_design_matrix(df, duration_col, event_col, clock_col, covariate_c
 
     for col in x.columns:
         s = x[col]
+
+        # Force selected categorical covariates to dummy variables even if coded numerically.
+        if force_categorical_covariate(col):
+            cat = s.astype("object").where(s.notna(), "Missing").astype(str)
+            n_unique = cat.nunique(dropna=False)
+
+            if n_unique <= 1:
+                continue
+
+            if n_unique > 80:
+                warn("Skipping high-cardinality categorical covariate {} with {} levels.".format(col, n_unique))
+                continue
+
+            dummy = pd.get_dummies(cat, prefix=clean_col_name(col), drop_first=True)
+            processed.append(dummy.astype(float))
+            continue
+
         numeric = pd.to_numeric(s, errors="coerce")
         numeric_fraction = numeric.notna().mean()
 
@@ -801,7 +967,7 @@ def run_one_clock(args):
         covariate_id_col_arg=args.covariate_id_col,
     )
 
-    covariate_cols = select_common_covariates(
+    cov_df, covariate_cols, covariate_source_desc = select_common_covariates(
         cov_df,
         instance=field53_instance,
         covariate_cols_arg=args.covariate_cols,
@@ -813,6 +979,9 @@ def run_one_clock(args):
     info("Selected covariates:")
     for c in covariate_cols:
         info("  - {}".format(c))
+
+    info("Covariate source summary:")
+    info("  {}".format(covariate_source_desc))
 
     cov_keep = cov_df[
         ["participant_id"] + covariate_cols
@@ -953,6 +1122,7 @@ def run_one_clock(args):
         "covariate_csv": str(covariate_csv),
         "covariate_id_col": cov_id_col,
         "covariates_selected": ";".join(covariate_cols),
+        "covariate_source_summary": covariate_source_desc,
     }])
 
     summary.to_csv(summary_out, sep="\t", index=False)
@@ -972,6 +1142,8 @@ def run_one_clock(args):
         {"metric": "death_date_cols", "value": ";".join(death_date_cols)},
         {"metric": "covariate_id_col", "value": cov_id_col},
         {"metric": "covariates_selected", "value": ";".join(covariate_cols)},
+        {"metric": "covariate_source_summary", "value": covariate_source_desc},
+        {"metric": "genetic_pcs_included_by_default", "value": "No"},
     ])
 
     qc.to_csv(qc_out, sep="\t", index=False)
@@ -1020,7 +1192,12 @@ def main():
     parser.add_argument(
         "--covariate-cols",
         default=None,
-        help="Comma-separated exact covariate columns. If omitted, auto-detect common covariates.",
+        help=(
+            "Comma-separated exact covariate columns. "
+            "If omitted, default covariates are: age at assessment, sex, "
+            "genetic ethnic grouping, assessment center, smoking, BMI, "
+            "mean diastolic BP, mean systolic BP. Genetic PCs are excluded by default."
+        ),
     )
 
     parser.add_argument("--penalizer", type=float, default=0.01)
