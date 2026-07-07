@@ -75,7 +75,7 @@ def create_folder_if_not_exists(folder_path):
         os.makedirs(folder_path)
 
 disease = 'asthma'
-### 7 mri asthma clock
+### 1 mri asthma clock
 for organ in ['spleen']:
     tsv = '/cbica/home/wenju/Reproducibile_paper/WholeBodyClock/all_disease_lepoch_incremental_value_scale_qc/stable_significant_disease_clock_acceleration_z_wide.tsv'
     df_data = pd.read_csv(tsv, sep='\t')
@@ -86,7 +86,7 @@ for organ in ['spleen']:
     fastgwa_fam = "/cbica/home/wenju/Dataset/UKBB/UKBB_genetic_preprocess_all/S3_apply_all/chr_all_AllUKBBPeople.fam"
     prepare_data(df_data, cov_tsv, output_dir, fastgwa_fam)
 
-### 11 proteomics asthma clock
+### 4 proteomics asthma clock
 for organ in ['Reproductive_female', 'Hepatic', 'Endocrine', 'Immune']:
     organ_small = organ.lower()
     df_data.rename({disease + '_' + organ_small + '_proteomics_' + disease + '_clock_acceleration_z': 'EPOCH'}, axis=1, inplace=True)
