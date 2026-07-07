@@ -86,7 +86,7 @@ for organ in ['Brain', 'Hepatic', 'Endocrine', 'Heart', 'Immune', 'Reproductive_
     col_name = disease + '_' + organ_small + '_proteomics_clock_acceleration_z'
     if col_name in clock_names:
         df = df_data[['participant_id', col_name]]
-        df.rename({disease + '_' + organ_small + '_proteomics_' + disease + '_clock_acceleration_z': 'EPOCH'}, axis=1, inplace=True)
+        df.rename({disease + '_' + organ_small + '_proteomics_clock_acceleration_z': 'EPOCH'}, axis=1, inplace=True)
         cov_tsv = '/cbica/home/wenju/Reproducibile_paper/PRS_UKBB/prediction/data/UKBB_fullsample_covariate.csv'
         output_dir = os.path.join("/cbica/home/wenju/Reproducibile_paper/WholeBodyClock", organ + '_proteomics_' + disease + '_clock', 'fastGWA', 'data')
         create_folder_if_not_exists(output_dir)
@@ -101,7 +101,7 @@ for organ in ['Endocrine', 'Digestive', 'Hepatic', 'Metabolic']:
     col_name = disease + '_' + organ_small + '_metabolomics_clock_acceleration_z'
     if col_name in clock_names:
         df = df_data[['participant_id', col_name]]
-        df.rename({disease + '_' + organ_small + '_metabolomics_' + disease + '_clock_acceleration_z': 'EPOCH'}, axis=1, inplace=True)
+        df.rename({disease + '_' + organ_small + '_metabolomics_clock_acceleration_z': 'EPOCH'}, axis=1, inplace=True)
         cov_tsv = '/cbica/home/wenju/Reproducibile_paper/PRS_UKBB/prediction/data/UKBB_fullsample_covariate.csv'
         output_dir = os.path.join("/cbica/home/wenju/Reproducibile_paper/WholeBodyClock", organ + '_metabolomics_' + disease + '_clock', 'fastGWA', 'data')
         create_folder_if_not_exists(output_dir)
