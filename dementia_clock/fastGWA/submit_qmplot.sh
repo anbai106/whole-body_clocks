@@ -1,29 +1,29 @@
 #!/bin/bash
 #SBATCH --partition=all
-#SBATCH --job-name=qmplot_asthma
-#SBATCH --array=0-9
+#SBATCH --job-name=qmplot_dementia
+#SBATCH --array=0-10%10
 #SBATCH --time=06:00:00
 #SBATCH --mem-per-cpu=16G
 #SBATCH --cpus-per-task=1
-#SBATCH --output=/cbica/home/wenju/output/qmplot_asthma_%A_%a.out
-#SBATCH --error=/cbica/home/wenju/output/qmplot_asthma_%A_%a.err
+#SBATCH --output=/cbica/home/wenju/output/qmplot_dementia_%A_%a.out
+#SBATCH --error=/cbica/home/wenju/output/qmplot_dementia_%A_%a.err
 
 # ============================================================
-# Run qmplot for asthma disease L'EPOCH fastGWA results
+# Run qmplot for dementia disease L'EPOCH fastGWA results
 #
 # One Slurm array task = one disease-clock fastGWA result.
 #
 # Input pattern:
-#   /cbica/home/wenju/Reproducibile_paper/WholeBodyClock/*_asthma_clock/fastGWA/output/*fastGWA
+#   /cbica/home/wenju/Reproducibile_paper/WholeBodyClock/*_dementia_clock/fastGWA/output/*fastGWA
 #
 # Output:
 #   /cbica/home/wenju/Reproducibile_paper/WholeBodyClock/<clock_folder>/fastGWA/qmplot/
 #
 # Recommended:
-#   bash submit_qmplot_asthma.slurm
+#   bash submit_qmplot_dementia.slurm
 #
 # Or directly:
-#   sbatch submit_qmplot_asthma.slurm
+#   sbatch submit_qmplot_dementia.slurm
 # ============================================================
 
 set -euo pipefail
@@ -32,11 +32,11 @@ set -euo pipefail
 # User settings
 # -----------------------------
 
-DISEASE="${DISEASE:-asthma}"
+DISEASE="${DISEASE:-dementia}"
 
 BASE_DIR="${BASE_DIR:-/cbica/home/wenju/Reproducibile_paper/WholeBodyClock}"
 
-PROJECT_DIR="${PROJECT_DIR:-/cbica/home/wenju/Project/whole-body_clocks/asthma_clock/fastGWA}"
+PROJECT_DIR="${PROJECT_DIR:-/cbica/home/wenju/Project/whole-body_clocks/dementia_clock/fastGWA}"
 
 PLOT_SCRIPT="${PLOT_SCRIPT:-${PROJECT_DIR}/5_qmplt.py}"
 
