@@ -74,34 +74,48 @@ def create_folder_if_not_exists(folder_path):
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
 
+tsv = '/cbica/home/wenju/Reproducibile_paper/WholeBodyClock/all_disease_lepoch_incremental_value_scale_qc/stable_significant_disease_clock_acceleration_z_wide.tsv'
+df_data = pd.read_csv(tsv, sep='\t')
+clock_names = df_data.columns.to_list()
+
 disease = 'asthma'
 ### 1 mri asthma clock
 for organ in ['spleen']:
-    tsv = '/cbica/home/wenju/Reproducibile_paper/WholeBodyClock/all_disease_lepoch_incremental_value_scale_qc/stable_significant_disease_clock_acceleration_z_wide.tsv'
-    df_data = pd.read_csv(tsv, sep='\t')
-    df_data.rename({disease + '_' + organ + '_mri_clock_acceleration_z': 'EPOCH'}, axis=1, inplace=True)
-    cov_tsv = '/cbica/home/wenju/Reproducibile_paper/PRS_UKBB/prediction/data/UKBB_fullsample_covariate.csv'
-    output_dir = os.path.join("/cbica/home/wenju/Reproducibile_paper/WholeBodyClock", organ + '_mri_' + disease + '_clock', 'fastGWA', 'data')
-    create_folder_if_not_exists(output_dir)
-    fastgwa_fam = "/cbica/home/wenju/Dataset/UKBB/UKBB_genetic_preprocess_all/S3_apply_all/chr_all_AllUKBBPeople.fam"
-    prepare_data(df_data, cov_tsv, output_dir, fastgwa_fam)
+    col_name = disease + '_' + organ + '_mri_clock_acceleration_z'
+    if col_name in clock_names:
+        df_data.rename({disease + '_' + organ + '_mri_clock_acceleration_z': 'EPOCH'}, axis=1, inplace=True)
+        cov_tsv = '/cbica/home/wenju/Reproducibile_paper/PRS_UKBB/prediction/data/UKBB_fullsample_covariate.csv'
+        output_dir = os.path.join("/cbica/home/wenju/Reproducibile_paper/WholeBodyClock", organ + '_mri_' + disease + '_clock', 'fastGWA', 'data')
+        create_folder_if_not_exists(output_dir)
+        fastgwa_fam = "/cbica/home/wenju/Dataset/UKBB/UKBB_genetic_preprocess_all/S3_apply_all/chr_all_AllUKBBPeople.fam"
+        prepare_data(df_data, cov_tsv, output_dir, fastgwa_fam)
+    else:
+        raise Exception('Error...')
 
 ### 4 proteomics asthma clock
 for organ in ['Reproductive_female', 'Hepatic', 'Endocrine', 'Immune']:
     organ_small = organ.lower()
-    df_data.rename({disease + '_' + organ_small + '_proteomics_' + disease + '_clock_acceleration_z': 'EPOCH'}, axis=1, inplace=True)
-    cov_tsv = '/cbica/home/wenju/Reproducibile_paper/PRS_UKBB/prediction/data/UKBB_fullsample_covariate.csv'
-    output_dir = os.path.join("/cbica/home/wenju/Reproducibile_paper/WholeBodyClock", organ + '_proteomics_' + disease + '_clock', 'fastGWA', 'data')
-    create_folder_if_not_exists(output_dir)
-    fastgwa_fam = "/cbica/home/wenju/Dataset/UKBB/UKBB_genetic_preprocess_all/S3_apply_all/chr_all_AllUKBBPeople.fam"
-    prepare_data(df_data, cov_tsv, output_dir, fastgwa_fam)
+    col_name = disease + '_' + organ_small + '_proteomics_clock_acceleration_z'
+    if col_name in clock_names:
+        df_data.rename({disease + '_' + organ_small + '_proteomics_clock_acceleration_z': 'EPOCH'}, axis=1, inplace=True)
+        cov_tsv = '/cbica/home/wenju/Reproducibile_paper/PRS_UKBB/prediction/data/UKBB_fullsample_covariate.csv'
+        output_dir = os.path.join("/cbica/home/wenju/Reproducibile_paper/WholeBodyClock", organ + '_proteomics_' + disease + '_clock', 'fastGWA', 'data')
+        create_folder_if_not_exists(output_dir)
+        fastgwa_fam = "/cbica/home/wenju/Dataset/UKBB/UKBB_genetic_preprocess_all/S3_apply_all/chr_all_AllUKBBPeople.fam"
+        prepare_data(df_data, cov_tsv, output_dir, fastgwa_fam)
+    else:
+        raise Exception('Error...')
 
 ### 5 metabolomics asthma clock
 for organ in ['Endocrine', 'Digestive', 'Hepatic', 'Immune', 'Metabolic']:
     organ_small = organ.lower()
-    df_data.rename({disease + '_' + organ_small + '_metabolomics_' + disease + '_clock_acceleration_z': 'EPOCH'}, axis=1, inplace=True)
-    cov_tsv = '/cbica/home/wenju/Reproducibile_paper/PRS_UKBB/prediction/data/UKBB_fullsample_covariate.csv'
-    output_dir = os.path.join("/cbica/home/wenju/Reproducibile_paper/WholeBodyClock", organ + '_metabolomics_' + disease + '_clock', 'fastGWA', 'data')
-    create_folder_if_not_exists(output_dir)
-    fastgwa_fam = "/cbica/home/wenju/Dataset/UKBB/UKBB_genetic_preprocess_all/S3_apply_all/chr_all_AllUKBBPeople.fam"
-    prepare_data(df_data, cov_tsv, output_dir, fastgwa_fam)
+    col_name = disease + '_' + organ_small + '_metabolomics_clock_acceleration_z'
+    if col_name in clock_names:
+        df_data.rename({disease + '_' + organ_small + '_metabolomics_clock_acceleration_z': 'EPOCH'}, axis=1, inplace=True)
+        cov_tsv = '/cbica/home/wenju/Reproducibile_paper/PRS_UKBB/prediction/data/UKBB_fullsample_covariate.csv'
+        output_dir = os.path.join("/cbica/home/wenju/Reproducibile_paper/WholeBodyClock", organ + '_metabolomics_' + disease + '_clock', 'fastGWA', 'data')
+        create_folder_if_not_exists(output_dir)
+        fastgwa_fam = "/cbica/home/wenju/Dataset/UKBB/UKBB_genetic_preprocess_all/S3_apply_all/chr_all_AllUKBBPeople.fam"
+        prepare_data(df_data, cov_tsv, output_dir, fastgwa_fam)
+    else:
+        raise Exception('Error...')
