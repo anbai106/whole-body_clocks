@@ -6,6 +6,8 @@
 #SBATCH --output=/cbica/home/wenju/output/apoe_status_%A_%a.out
 #SBATCH --error=/cbica/home/wenju/output/apoe_status_%A_%a.err
 
+module load plink/2.20210701
+
 set -euo pipefail
 
 # ============================================================
