@@ -7,7 +7,7 @@
 #SBATCH --error=/cbica/home/wenju/output/prepare_data_%A_%a.err
 
 source activate DNE
-python /cbica/home/wenju/Project/whole-body_clocks/asthma_clock/fastGWA/1_prepare_data.py
+python /cbica/home/wenju/Project/whole-body_clocks/dementia_clock/fastGWA/1_prepare_data.py
 
 echo "Finish!"
 conda deactivate
