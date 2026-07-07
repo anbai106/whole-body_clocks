@@ -30,7 +30,7 @@ set -euo pipefail
 
 THREADS=4
 
-BFILE="/cbica/projects/MULTI/processed/UKBB/UKBB_Pe/genetics/S3_apply_all_Calls/chr_all_AllUKBBPeople"
+BFILE="/cbica/projects/MULTI/processed/UKBB/UKBB_Pe/genetics/S3_apply_all/chr_all_AllUKBBPeople"
 APOE_SNPS="/cbica/home/wenju/Project/Surreal_GAN_genetic_paper/ADNI/GWAS/APOE/apoe_snps.txt"
 
 OUTDIR="/cbica/home/wenju/Reproducibile_paper/WholeBodyClock/apoe_status_ukbb"
