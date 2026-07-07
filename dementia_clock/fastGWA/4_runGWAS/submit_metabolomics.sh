@@ -1,16 +1,16 @@
 #!/bin/bash
 #SBATCH --partition=all
 #SBATCH --job-name=ArrayJob
-#SBATCH --array=0-4
+#SBATCH --array=0-3
 #SBATCH --time=0-10:59:00
 #SBATCH --mem-per-cpu=24G
 #SBATCH --output=/cbica/home/wenju/output/fastGWA_%A_%a.out
 #SBATCH --error=/cbica/home/wenju/output/fastGWA_%A_%a.err
 
-numbers=(Endocrine Digestive Hepatic Immune Metabolic)
+numbers=(Endocrine Digestive Hepatic Metabolic)
 organ=${numbers[$SLURM_ARRAY_TASK_ID]}
 
-disease=asthma
+disease=dementia
 modality=metabolomics
 echo "Run fastGWA for organ: ${organ}"
 input_dir="/cbica/home/wenju/Reproducibile_paper/WholeBodyClock/${organ}_${modality}_${disease}_clock/fastGWA/data"
@@ -28,5 +28,5 @@ if [[ -f ${output_file}.fastGWA ]]; then
 else
   echo "GWAS for ${organ}..."
   sparse_grm=/cbica/home/wenju/Reproducibile_paper/UKBB_metabolomics/data/GRM_GCTA/fastGWA_grm_sparse_0.05
-  bash /cbica/home/wenju/Project/whole-body_clocks/asthma_clock/fastGWA/4_runGWAS/run.sh $output_dir $bfile $sparse_grm $pheno $output_file
+  bash /cbica/home/wenju/Project/whole-body_clocks/dementia_clock/fastGWA/4_runGWAS/run.sh $output_dir $bfile $sparse_grm $pheno $output_file
 fi

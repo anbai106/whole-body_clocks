@@ -26,29 +26,20 @@ lm_imaging_data <- function(data_src, cov_src, output_dir_final){
   write.table(imaging.resid.norm,file=paste(output_dir_final, "/EPOCH_pheno_normalized_residualized_with_related_indi.phen", sep=""),sep = " ",quote = F,col.names = F,row.names = F)
 }
 
-### 5 MetBAG
-organ_list = c('Endocrine', 'Digestive', 'Hepatic', 'Immune', 'Metabolic')
+### 4 MetBAG
+organ_list = c('Endocrine', 'Digestive', 'Hepatic', 'Metabolic')
 output_dir = '/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/'
 for (organ in organ_list) {
-  output_dir_final <- paste(output_dir, paste0(organ, "_metabolomics_asthma_clock"), 'fastGWA', 'data', sep = "/")
+  output_dir_final <- paste(output_dir, paste0(organ, "_metabolomics_dementia_clock"), 'fastGWA', 'data', sep = "/")
   data_src = paste(output_dir_final, 'EPOCH_pheno.txt', sep='/')
   cov_src = paste(output_dir_final, 'EPOCH_cov.txt', sep='/')
   lm_imaging_data(data_src, cov_src, output_dir_final)
 }
 
-### 4 ProtBAG
-organ_list = c('Reproductive_female', 'Hepatic', 'Endocrine', 'Immune')
+### 7 ProtBAG
+organ_list = c('Brain', 'Hepatic', 'Endocrine', 'Heart', 'Immune', 'Reproductive_female', 'Reproductive_male')
 for (organ in organ_list) {
-  output_dir_final <- paste(output_dir, paste0(organ, "_proteomics_asthma_clock"), 'fastGWA', 'data', sep = "/")
-  data_src = paste(output_dir_final, 'EPOCH_pheno.txt', sep='/')
-  cov_src = paste(output_dir_final, 'EPOCH_cov.txt', sep='/')
-  lm_imaging_data(data_src, cov_src, output_dir_final)
-}
-
-### 1 MRIBAG
-organ_list = c('spleen')
-for (organ in organ_list) {
-  output_dir_final <- paste(output_dir, paste0(organ, "_mri_asthma_clock"), 'fastGWA', 'data', sep = "/")
+  output_dir_final <- paste(output_dir, paste0(organ, "_proteomics_dementia_clock"), 'fastGWA', 'data', sep = "/")
   data_src = paste(output_dir_final, 'EPOCH_pheno.txt', sep='/')
   cov_src = paste(output_dir_final, 'EPOCH_cov.txt', sep='/')
   lm_imaging_data(data_src, cov_src, output_dir_final)
