@@ -20,7 +20,7 @@ RESULTDIR="${OUTDIR}/apoe_e4e4_vs_e2e2_dementia_clock_results"
 mkdir -p "${LOGDIR}"
 mkdir -p "${RESULTDIR}"
 
-PY_SCRIPT="${OUTDIR}/apoe_e4e4_vs_e2e2_clock_assoc.py"
+PY_SCRIPT="/cbica/home/wenju/Project/whole-body_clocks/dementia_clock/APOE/2_apoe_clock_bag.py"
 
 APOE_FILE="/cbica/home/wenju/Reproducibile_paper/WholeBodyClock/apoe_status_ukbb/ukbb_apoe_status.tsv"
 LEPOCH_FILE="/cbica/home/wenju/Reproducibile_paper/WholeBodyClock/all_disease_lepoch_incremental_value_scale_qc/stable_significant_disease_clock_acceleration_z_wide.tsv"
