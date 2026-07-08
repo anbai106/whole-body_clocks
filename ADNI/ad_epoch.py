@@ -3,16 +3,18 @@
 Build ADNI brain MRI AD L'EPOCH using elastic-net Cox survival modeling.
 
 Time zero:
-  ADNI baseline visit, preferably Visit_Code == bl.
+  The first cognitively normal visit with usable MUSE GM ROI features.
+  Prefer Visit_Code == bl when it contains sufficient MUSE GM ROI data;
+  otherwise use the earliest CN visit with sufficient MUSE GM ROI data.
 
 Eligible baseline diagnosis:
   CN.
 
 Event:
-  first follow-up diagnosis of MCI or AD.
+  First follow-up diagnosis of MCI or AD.
 
 Censoring:
-  last available follow-up visit if no MCI/AD conversion.
+  Last available follow-up visit without MCI/AD conversion.
 
 Features:
   Hard-coded MUSE gray-matter ROI volumes, matched to the UKB MUSE GM ROI set.
@@ -21,8 +23,8 @@ Model:
   Elastic-net Cox survival model using baseline MUSE GM ROI volumes plus covariates.
 
 Important constraint:
-  Model selection requires at least a minimum number of nonzero MUSE GM ROI coefficients,
-  so the final L'EPOCH remains brain-imaging related and is not purely covariate driven.
+  Model selection requires at least a minimum number of nonzero MUSE GM ROI
+  coefficients so the final L'EPOCH remains brain-imaging related.
 
 Primary output:
   adni_brain_mri_ad_lepoch_risk_score
@@ -33,7 +35,6 @@ Recommended downstream phenotype:
 
 import argparse
 import json
-import os
 import re
 import warnings
 from pathlib import Path
@@ -70,7 +71,6 @@ ACCEL_Z_COL = "adni_brain_mri_ad_lepoch_acceleration_z"
 ACCEL_YEARS_COL = "adni_brain_mri_ad_lepoch_acceleration_years"
 CLOCK_AGE_COL = "adni_brain_mri_ad_lepoch_clock_age_years"
 
-# Hard-coded MUSE GM ROIs requested by the user.
 MUSE_GM_ROIS = [
     "MUSE_Volume_23", "MUSE_Volume_30", "MUSE_Volume_31",
     "MUSE_Volume_32", "MUSE_Volume_36", "MUSE_Volume_37",
@@ -116,16 +116,16 @@ MUSE_GM_ROIS = [
 
 
 # ============================================================
-# Argument parsing
+# Arguments
 # ============================================================
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Build ADNI brain MRI AD L'EPOCH using baseline MUSE GM ROIs and Coxnet survival modeling."
+        description="Build ADNI brain MRI AD L'EPOCH using imaging-aware baseline selection."
     )
 
-    parser.add_argument("--input-file", required=True, help="ADNI longitudinal MUSE file, TSV or CSV.")
-    parser.add_argument("--outdir", required=True, help="Output directory.")
+    parser.add_argument("--input-file", required=True)
+    parser.add_argument("--outdir", required=True)
     parser.add_argument("--prefix", default="adni_brain_mri_ad_lepoch")
 
     parser.add_argument("--id-col", default="PTID")
@@ -144,6 +144,17 @@ def parse_args():
     parser.add_argument("--stratify-age-bins", type=int, default=5)
 
     parser.add_argument("--max-feature-missing", type=float, default=0.30)
+
+    parser.add_argument(
+        "--min-baseline-roi-fraction",
+        type=float,
+        default=0.80,
+        help=(
+            "Minimum fraction of hard-coded MUSE GM ROIs that must be non-missing "
+            "on the selected baseline imaging row."
+        )
+    )
+
     parser.add_argument("--min-followup-days", type=int, default=1)
 
     parser.add_argument("--l1-ratios", default="0.1,0.25,0.5,0.75,1.0")
@@ -209,6 +220,35 @@ def parse_date_series(s):
     return pd.to_datetime(s, errors="coerce")
 
 
+def clean_numeric_series(s):
+    """
+    Robust numeric conversion for ROI/covariate columns.
+    Handles numeric columns, strings, blank cells, and comma-formatted numbers.
+    """
+    if pd.api.types.is_numeric_dtype(s):
+        return pd.to_numeric(s, errors="coerce")
+
+    s2 = (
+        s.astype("object")
+         .where(s.notna(), np.nan)
+         .astype(str)
+         .str.strip()
+         .str.replace(",", "", regex=False)
+    )
+
+    s2 = s2.replace({
+        "": np.nan,
+        "nan": np.nan,
+        "NaN": np.nan,
+        "NA": np.nan,
+        "N/A": np.nan,
+        "None": np.nan,
+        "null": np.nan
+    })
+
+    return pd.to_numeric(s2, errors="coerce")
+
+
 def visit_code_to_month(x):
     if pd.isna(x):
         return np.nan
@@ -249,6 +289,17 @@ def brain_feature_mask(feature_names):
     return np.char.startswith(feature_names, "num__MUSE_Volume_")
 
 
+def predict_risk_score(model, X):
+    return np.asarray(model.predict(X)).reshape(-1)
+
+
+def compute_row_roi_coverage(df, roi_cols):
+    roi_numeric = df[roi_cols].apply(clean_numeric_series, axis=0)
+    n_nonmissing = roi_numeric.notna().sum(axis=1)
+    frac_nonmissing = n_nonmissing / float(len(roi_cols))
+    return n_nonmissing, frac_nonmissing
+
+
 def make_stratify_vector(df, age_col="Age", event_col="event", age_bins=5):
     if event_col not in df.columns:
         return None
@@ -257,9 +308,9 @@ def make_stratify_vector(df, age_col="Age", event_col="event", age_bins=5):
     if len(counts) < 2 or counts.min() < 2:
         return None
 
-    if age_col in df.columns and age_bins and age_bins > 1:
+    if age_col is not None and age_col in df.columns and age_bins and age_bins > 1:
         try:
-            age_numeric = pd.to_numeric(df[age_col], errors="coerce")
+            age_numeric = clean_numeric_series(df[age_col])
             age_bin = pd.qcut(
                 age_numeric.rank(method="first"),
                 q=age_bins,
@@ -275,41 +326,6 @@ def make_stratify_vector(df, age_col="Age", event_col="event", age_bins=5):
     return df[event_col].astype(int)
 
 
-def fit_coxph_or_ridge_fallback(X, y, model_name="cox_model"):
-    try:
-        try:
-            model = CoxPHSurvivalAnalysis(alpha=0.0, ties="breslow")
-        except TypeError:
-            model = CoxPHSurvivalAnalysis(alpha=0.0)
-        model.fit(X, y)
-        return model, "CoxPHSurvivalAnalysis(alpha=0.0)"
-    except Exception as exc:
-        warnings.warn(
-            f"{model_name}: unpenalized CoxPH failed ({exc}). "
-            "Falling back to weakly penalized Coxnet."
-        )
-
-    last = None
-    for alpha in [1e-6, 1e-5, 1e-4, 1e-3, 1e-2]:
-        try:
-            model = CoxnetSurvivalAnalysis(
-                l1_ratio=0.01,
-                alphas=[alpha],
-                fit_baseline_model=True,
-                max_iter=100000
-            )
-            model.fit(X, y)
-            return model, f"CoxnetSurvivalAnalysis(l1_ratio=0.01, alpha={alpha})"
-        except Exception as exc:
-            last = exc
-
-    raise RuntimeError(f"{model_name}: all Cox fitting attempts failed. Last error: {last}")
-
-
-def predict_risk_score(model, X):
-    return np.asarray(model.predict(X)).reshape(-1)
-
-
 # ============================================================
 # ADNI survival dataset construction
 # ============================================================
@@ -322,9 +338,27 @@ def construct_adni_survival_dataset(
     dx_col,
     baseline_dx,
     event_dx_set,
-    min_followup_days
+    min_followup_days,
+    roi_cols,
+    min_baseline_roi_fraction
 ):
+    """
+    Construct ADNI survival dataset.
+
+    Time zero:
+      first CN row with sufficient MUSE GM ROI coverage.
+      Prefer explicit baseline Visit_Code == bl if it has usable MUSE features;
+      otherwise choose the earliest CN row with usable MUSE features.
+    """
+
     d = df.copy()
+
+    missing_roi_cols = [c for c in roi_cols if c not in d.columns]
+    if missing_roi_cols:
+        raise ValueError(
+            f"ROI columns passed to construct_adni_survival_dataset are missing: "
+            f"{missing_roi_cols[:10]}"
+        )
 
     d["_dx_norm"] = d[dx_col].apply(normalize_dx)
     d["_date"] = parse_date_series(d[date_col])
@@ -336,32 +370,72 @@ def construct_adni_survival_dataset(
 
     d = d.loc[d[id_col].notna()].copy()
     d = d.loc[d["_sort_key"].notna()].copy()
+
+    d["_muse_gm_roi_nonmissing_n"], d["_muse_gm_roi_nonmissing_fraction"] = compute_row_roi_coverage(
+        d,
+        roi_cols
+    )
+
+    d["_has_usable_muse_gm"] = (
+        d["_muse_gm_roi_nonmissing_fraction"] >= min_baseline_roi_fraction
+    )
+
     d = d.sort_values([id_col, "_sort_key"], kind="mergesort")
 
     baseline_rows = []
+    skipped_rows = []
 
     for pid, g in d.groupby(id_col, sort=False):
         g = g.copy().sort_values("_sort_key", kind="mergesort")
 
-        bl_mask = g[visit_col].astype(str).str.lower().isin(
+        candidates = g.loc[
+            g["_has_usable_muse_gm"] & (g["_dx_norm"] == baseline_dx)
+        ].copy()
+
+        if candidates.empty:
+            skipped_rows.append({
+                id_col: pid,
+                "skip_reason": "no_CN_row_with_sufficient_MUSE_GM_ROI_coverage",
+                "max_muse_gm_roi_nonmissing_fraction": float(g["_muse_gm_roi_nonmissing_fraction"].max()),
+                "n_rows": int(g.shape[0])
+            })
+            continue
+
+        bl_mask = candidates[visit_col].astype(str).str.lower().isin(
             ["bl", "base", "baseline", "m00", "m0"]
         )
 
         if bl_mask.any():
-            baseline = g.loc[bl_mask].iloc[0]
+            baseline = candidates.loc[bl_mask].iloc[0]
         else:
-            baseline = g.iloc[0]
-
-        baseline_dx_value = normalize_dx(baseline[dx_col])
-        if baseline_dx_value != baseline_dx:
-            continue
+            baseline = candidates.iloc[0]
 
         base_sort = baseline["_sort_key"]
         base_date = baseline["_date"]
         base_month = baseline["_visit_month"]
 
+        prior_event = g.loc[
+            (g["_sort_key"] < base_sort) & g["_dx_norm"].isin(event_dx_set)
+        ]
+
+        if not prior_event.empty:
+            skipped_rows.append({
+                id_col: pid,
+                "skip_reason": "MCI_or_AD_before_selected_MUSE_baseline",
+                "max_muse_gm_roi_nonmissing_fraction": float(g["_muse_gm_roi_nonmissing_fraction"].max()),
+                "n_rows": int(g.shape[0])
+            })
+            continue
+
         follow = g.loc[g["_sort_key"] > base_sort].copy()
+
         if follow.empty:
+            skipped_rows.append({
+                id_col: pid,
+                "skip_reason": "no_followup_after_selected_MUSE_baseline",
+                "max_muse_gm_roi_nonmissing_fraction": float(g["_muse_gm_roi_nonmissing_fraction"].max()),
+                "n_rows": int(g.shape[0])
+            })
             continue
 
         follow["_is_event"] = follow["_dx_norm"].isin(event_dx_set)
@@ -381,10 +455,17 @@ def construct_adni_survival_dataset(
             time_days = np.nan
 
         if not np.isfinite(time_days) or time_days < min_followup_days:
+            skipped_rows.append({
+                id_col: pid,
+                "skip_reason": "invalid_or_too_short_followup_after_selected_MUSE_baseline",
+                "max_muse_gm_roi_nonmissing_fraction": float(g["_muse_gm_roi_nonmissing_fraction"].max()),
+                "n_rows": int(g.shape[0])
+            })
             continue
 
         b = baseline.copy()
-        b["baseline_dx"] = baseline_dx_value
+
+        b["baseline_dx"] = normalize_dx(baseline[dx_col])
         b["event"] = bool(event)
         b["time_days"] = float(time_days)
         b["time_years"] = float(time_days) / 365.25
@@ -392,17 +473,22 @@ def construct_adni_survival_dataset(
         b["event_or_censor_visit"] = end_row[visit_col]
         b["event_or_censor_date"] = end_row["_date"]
 
+        b["selected_baseline_visit_code"] = baseline[visit_col]
+        b["selected_baseline_date"] = baseline["_date"]
+        b["baseline_muse_gm_roi_nonmissing_n"] = int(baseline["_muse_gm_roi_nonmissing_n"])
+        b["baseline_muse_gm_roi_nonmissing_fraction"] = float(
+            baseline["_muse_gm_roi_nonmissing_fraction"]
+        )
+
         baseline_rows.append(b)
 
     if len(baseline_rows) == 0:
-        raise ValueError(
-            "No eligible baseline CN participants with follow-up were found. "
-            "Check PTID, Visit_Code, Date, and DX_Binary."
-        )
+        return pd.DataFrame(), pd.DataFrame(skipped_rows)
 
     out = pd.DataFrame(baseline_rows).reset_index(drop=True)
+    skipped = pd.DataFrame(skipped_rows)
 
-    return out
+    return out, skipped
 
 
 # ============================================================
@@ -432,9 +518,10 @@ def filter_features_by_missingness_and_variance(df, feature_cols, max_missing):
     rows = []
 
     for c in feature_cols:
-        x = pd.to_numeric(df[c], errors="coerce")
+        x = clean_numeric_series(df[c])
         missing_rate = float(x.isna().mean())
-        variance = float(x.var(skipna=True)) if x.notna().sum() > 1 else np.nan
+        n_nonmissing = int(x.notna().sum())
+        variance = float(x.var(skipna=True)) if n_nonmissing > 1 else np.nan
 
         keep_flag = (
             missing_rate <= max_missing
@@ -444,6 +531,8 @@ def filter_features_by_missingness_and_variance(df, feature_cols, max_missing):
 
         rows.append({
             "roi_feature": c,
+            "n": int(len(x)),
+            "n_nonmissing": n_nonmissing,
             "missing_rate": missing_rate,
             "variance": variance,
             "kept": keep_flag
@@ -452,13 +541,12 @@ def filter_features_by_missingness_and_variance(df, feature_cols, max_missing):
         if keep_flag:
             keep.append(c)
 
-    if len(keep) == 0:
-        raise ValueError(
-            "No MUSE GM ROI features passed missingness/variance QC. "
-            "Consider relaxing --max-feature-missing."
-        )
+    qc = pd.DataFrame(rows).sort_values(
+        ["kept", "missing_rate", "roi_feature"],
+        ascending=[False, True, True]
+    )
 
-    return keep, pd.DataFrame(rows)
+    return keep, qc
 
 
 def build_design_matrix_columns(df, roi_cols, covariates):
@@ -474,7 +562,7 @@ def build_design_matrix_columns(df, roi_cols, covariates):
             categorical_covariates.append(c)
             continue
 
-        x = pd.to_numeric(df[c], errors="coerce")
+        x = clean_numeric_series(df[c])
         non_missing_original = df[c].notna().sum()
         non_missing_numeric = x.notna().sum()
 
@@ -485,7 +573,7 @@ def build_design_matrix_columns(df, roi_cols, covariates):
             categorical_covariates.append(c)
 
     for c in roi_cols:
-        df[c] = pd.to_numeric(df[c], errors="coerce")
+        df[c] = clean_numeric_series(df[c])
 
     numeric_cols = numeric_covariates + roi_cols
     categorical_cols = categorical_covariates
@@ -532,8 +620,39 @@ def get_feature_names(preprocessor):
 
 
 # ============================================================
-# Coxnet model fitting with nonzero brain feature requirement
+# Cox model helpers
 # ============================================================
+
+def fit_coxph_or_ridge_fallback(X, y, model_name="cox_model"):
+    try:
+        try:
+            model = CoxPHSurvivalAnalysis(alpha=0.0, ties="breslow")
+        except TypeError:
+            model = CoxPHSurvivalAnalysis(alpha=0.0)
+        model.fit(X, y)
+        return model, "CoxPHSurvivalAnalysis(alpha=0.0)"
+    except Exception as exc:
+        warnings.warn(
+            f"{model_name}: unpenalized CoxPH failed ({exc}). "
+            "Falling back to weakly penalized Coxnet."
+        )
+
+    last = None
+    for alpha in [1e-6, 1e-5, 1e-4, 1e-3, 1e-2]:
+        try:
+            model = CoxnetSurvivalAnalysis(
+                l1_ratio=0.01,
+                alphas=[alpha],
+                fit_baseline_model=True,
+                max_iter=100000
+            )
+            model.fit(X, y)
+            return model, f"CoxnetSurvivalAnalysis(l1_ratio=0.01, alpha={alpha})"
+        except Exception as exc:
+            last = exc
+
+    raise RuntimeError(f"{model_name}: all Cox fitting attempts failed. Last error: {last}")
+
 
 def fit_and_select_coxnet(
     X_train,
@@ -573,7 +692,7 @@ def fit_and_select_coxnet(
         "n_nonzero_brain_features": 0,
         "n_nonzero_total_features": 0,
         "used_penalty_factor": True,
-        "selection_rule": "fallback: best validation C-index among models with the maximum available number of nonzero brain features"
+        "selection_rule": "fallback: best validation C-index among models with maximum available nonzero brain features"
     }
 
     for l1_ratio in l1_ratios:
@@ -621,7 +740,6 @@ def fit_and_select_coxnet(
             if not np.isfinite(cindex):
                 continue
 
-            # Fallback tracks best model among those with the greatest number of brain features.
             if (
                 n_nonzero_brain > fallback["n_nonzero_brain_features"]
                 or (
@@ -639,7 +757,6 @@ def fit_and_select_coxnet(
                     "used_penalty_factor": bool(used_penalty_factor)
                 })
 
-            # Primary selection requires a minimum number of nonzero brain features.
             if n_nonzero_brain < min_nonzero_brain_features:
                 continue
 
@@ -675,9 +792,7 @@ def fit_and_select_coxnet(
     if best["alpha"] is None or best["n_nonzero_brain_features"] == 0:
         raise RuntimeError(
             "Failed to select a brain-imaging-related Coxnet model. "
-            "All candidate models had zero nonzero MUSE GM ROI coefficients. "
-            "Consider reducing --min-nonzero-brain-features, lowering --alpha-min-ratio, "
-            "or checking whether MUSE features have valid variance."
+            "All candidate models had zero nonzero MUSE GM ROI coefficients."
         )
 
     return best, penalty_factor
@@ -705,7 +820,7 @@ def fit_final_model(X_trainval, y_trainval, best, penalty_factor):
 
 
 # ============================================================
-# Incremental value analysis
+# Incremental value
 # ============================================================
 
 def get_incremental_model_feature_indices(feature_names):
@@ -907,7 +1022,7 @@ def run_incremental_value_analysis(
 
 
 # ============================================================
-# Clock acceleration residualization
+# Clock acceleration and absolute risk
 # ============================================================
 
 def add_clock_age_and_acceleration(pred_df, covariate_cols, train_mask_col="split"):
@@ -938,7 +1053,7 @@ def add_clock_age_and_acceleration(pred_df, covariate_cols, train_mask_col="spli
         if c in ["Sex", "SITE"] or not pd.api.types.is_numeric_dtype(df[c]):
             categorical_covs.append(c)
         else:
-            numeric_covs.append(c)
+            categorical_covs.append(c) if False else numeric_covs.append(c)
 
     transformers = []
 
@@ -965,8 +1080,8 @@ def add_clock_age_and_acceleration(pred_df, covariate_cols, train_mask_col="spli
     X_all_raw = df[covariate_cols].copy()
 
     for c in numeric_covs:
-        X_train_raw[c] = pd.to_numeric(X_train_raw[c], errors="coerce")
-        X_all_raw[c] = pd.to_numeric(X_all_raw[c], errors="coerce")
+        X_train_raw[c] = clean_numeric_series(X_train_raw[c])
+        X_all_raw[c] = clean_numeric_series(X_all_raw[c])
 
     for c in categorical_covs:
         X_train_raw[c] = X_train_raw[c].astype("object")
@@ -1075,29 +1190,21 @@ def main():
     log(f"Event DX: {sorted(event_dx_set)}")
     log(f"Covariates: {covariates}")
     log(f"Hard-coded MUSE GM ROIs requested: {len(MUSE_GM_ROIS)}")
+    log(f"Minimum baseline ROI fraction: {args.min_baseline_roi_fraction}")
     log(f"Minimum nonzero brain features required: {args.min_nonzero_brain_features}")
     log("============================================================")
 
     # ------------------------------------------------------------
-    # Load ADNI file
+    # Load data
     # ------------------------------------------------------------
 
     df_raw = read_table(args.input_file)
 
-    required = [
-        args.id_col,
-        args.visit_col,
-        args.date_col,
-        args.dx_col
-    ]
-
+    required = [args.id_col, args.visit_col, args.date_col, args.dx_col]
     missing_required = [c for c in required if c not in df_raw.columns]
+
     if missing_required:
         raise ValueError(f"Missing required columns: {missing_required}")
-
-    # ------------------------------------------------------------
-    # Select hard-coded MUSE GM ROI features
-    # ------------------------------------------------------------
 
     roi_available, roi_missing = select_hardcoded_muse_gm_rois(df_raw)
 
@@ -1113,10 +1220,10 @@ def main():
     log(f"MUSE GM ROIs available in file: {len(roi_available)} / {len(MUSE_GM_ROIS)}")
 
     # ------------------------------------------------------------
-    # Build survival dataset
+    # Build imaging-aware baseline CN survival dataset
     # ------------------------------------------------------------
 
-    df = construct_adni_survival_dataset(
+    df, skipped_baseline_df = construct_adni_survival_dataset(
         df=df_raw,
         id_col=args.id_col,
         visit_col=args.visit_col,
@@ -1124,22 +1231,34 @@ def main():
         dx_col=args.dx_col,
         baseline_dx=baseline_dx,
         event_dx_set=event_dx_set,
-        min_followup_days=args.min_followup_days
+        min_followup_days=args.min_followup_days,
+        roi_cols=roi_available,
+        min_baseline_roi_fraction=args.min_baseline_roi_fraction
     )
 
-    log("Constructed ADNI baseline-CN survival dataset:")
-    log(f"  N baseline CN with follow-up = {df.shape[0]}")
+    skipped_baseline_df.to_csv(
+        outdir / f"{prefix}_skipped_participants_before_survival_dataset.tsv",
+        sep="\t",
+        index=False
+    )
+
+    if df.empty:
+        raise ValueError(
+            "No eligible baseline CN participants with usable MUSE GM ROI features and follow-up were found. "
+            f"Skipped participant summary saved to {outdir / f'{prefix}_skipped_participants_before_survival_dataset.tsv'}."
+        )
+
+    log("Constructed ADNI baseline-CN imaging survival dataset:")
+    log(f"  N baseline CN with usable MUSE and follow-up = {df.shape[0]}")
     log(f"  Events MCI/AD = {int(df['event'].sum())}")
     log(f"  Censored = {int((~df['event']).sum())}")
     log(f"  Median follow-up years = {df['time_years'].median():.2f}")
 
     if int(df["event"].sum()) < 10:
-        warnings.warn(
-            "Very few conversion events. ADNI AD L'EPOCH model may be unstable."
-        )
+        warnings.warn("Very few conversion events. ADNI AD L'EPOCH model may be unstable.")
 
     # ------------------------------------------------------------
-    # Basic covariate checks and types
+    # Covariate cleanup
     # ------------------------------------------------------------
 
     for c in covariates:
@@ -1147,10 +1266,10 @@ def main():
             warnings.warn(f"Requested covariate {c} is missing from baseline data.")
 
     if "Age" in df.columns:
-        df["Age"] = pd.to_numeric(df["Age"], errors="coerce")
+        df["Age"] = clean_numeric_series(df["Age"])
 
     if "DLICV" in df.columns:
-        df["DLICV"] = pd.to_numeric(df["DLICV"], errors="coerce")
+        df["DLICV"] = clean_numeric_series(df["DLICV"])
 
     if "Sex" in df.columns:
         df["Sex"] = df["Sex"].astype(str).str.strip().replace({
@@ -1183,6 +1302,35 @@ def main():
         index=False
     )
 
+    baseline_roi_coverage_cols = [
+        args.id_col,
+        args.visit_col,
+        args.date_col,
+        args.dx_col,
+        "selected_baseline_visit_code",
+        "selected_baseline_date",
+        "baseline_muse_gm_roi_nonmissing_n",
+        "baseline_muse_gm_roi_nonmissing_fraction",
+        "time_years",
+        "event",
+        "event_or_censor_dx",
+        "event_or_censor_visit"
+    ]
+    baseline_roi_coverage_cols = [c for c in baseline_roi_coverage_cols if c in df.columns]
+
+    df[baseline_roi_coverage_cols].to_csv(
+        outdir / f"{prefix}_baseline_muse_gm_roi_coverage.tsv",
+        sep="\t",
+        index=False
+    )
+
+    if len(roi_cols) == 0:
+        raise ValueError(
+            "No MUSE GM ROI features passed missingness/variance QC after selecting imaging-aware baseline rows. "
+            f"ROI QC table saved to {outdir / f'{prefix}_muse_gm_roi_qc.tsv'}. "
+            f"Baseline ROI coverage table saved to {outdir / f'{prefix}_baseline_muse_gm_roi_coverage.tsv'}."
+        )
+
     pd.DataFrame({"roi_feature": roi_cols}).to_csv(
         outdir / f"{prefix}_selected_muse_gm_rois.tsv",
         sep="\t",
@@ -1213,6 +1361,10 @@ def main():
         args.date_col,
         args.dx_col,
         "baseline_dx",
+        "selected_baseline_visit_code",
+        "selected_baseline_date",
+        "baseline_muse_gm_roi_nonmissing_n",
+        "baseline_muse_gm_roi_nonmissing_fraction",
         "event_or_censor_dx",
         "event_or_censor_visit",
         "event_or_censor_date",
@@ -1224,6 +1376,8 @@ def main():
     for c in covariates:
         if c in df.columns and c not in survival_keep_cols:
             survival_keep_cols.append(c)
+
+    survival_keep_cols = [c for c in survival_keep_cols if c in df.columns]
 
     df[survival_keep_cols].to_csv(
         outdir / f"{prefix}_survival_dataset.tsv",
@@ -1317,7 +1471,7 @@ def main():
     )
 
     # ------------------------------------------------------------
-    # Tune Coxnet with required nonzero brain features
+    # Tune Coxnet
     # ------------------------------------------------------------
 
     log("Tuning elastic-net Cox model with nonzero MUSE GM ROI requirement...")
@@ -1438,6 +1592,10 @@ def main():
             args.visit_col,
             args.date_col,
             args.dx_col,
+            "selected_baseline_visit_code",
+            "selected_baseline_date",
+            "baseline_muse_gm_roi_nonmissing_n",
+            "baseline_muse_gm_roi_nonmissing_fraction",
             "event_or_censor_dx",
             "event_or_censor_visit",
             "event_or_censor_date",
@@ -1448,6 +1606,8 @@ def main():
         for c in covariates:
             if c in part.columns and c not in base:
                 base.append(c)
+
+        base = [c for c in base if c in part.columns]
 
         out = part[base].copy()
         out["split"] = split
@@ -1492,7 +1652,7 @@ def main():
     pred_all = pd.concat([pred_train, pred_val, pred_test], ignore_index=True)
 
     # ------------------------------------------------------------
-    # Residualized L'EPOCH acceleration
+    # Residualized AD L'EPOCH acceleration
     # ------------------------------------------------------------
 
     log("Adding residualized AD L'EPOCH acceleration...")
@@ -1573,7 +1733,7 @@ def main():
         "incremental_value_delta_cindex": delta_cindex_records,
         "incremental_value_fitting_methods": inc["fitting_methods"],
         "input_file": args.input_file,
-        "time_zero": "ADNI baseline visit, preferably Visit_Code == bl",
+        "time_zero": "First CN visit with usable MUSE GM ROI features; prefer bl if available",
         "event": "First follow-up diagnosis of MCI or AD",
         "censoring": "Last available follow-up visit without MCI/AD conversion"
     }
@@ -1607,6 +1767,7 @@ def main():
         "best_alpha": float(best["alpha"]),
         "best_validation_cindex_during_tuning": float(best["cindex"]),
         "used_penalty_factor": bool(best["used_penalty_factor"]),
+        "min_baseline_roi_fraction": float(args.min_baseline_roi_fraction),
         "min_nonzero_brain_features_requested": int(args.min_nonzero_brain_features),
         "best_model_nonzero_brain_features_validation": int(best["n_nonzero_brain_features"]),
         "final_model_nonzero_brain_features": int(final_nonzero_brain),
@@ -1616,7 +1777,7 @@ def main():
         "n_nonzero_coefficients_total": int(nonzero_coef_df.shape[0]),
         "n_nonzero_muse_gm_roi_coefficients": int(final_nonzero_brain),
         "covariates": covariates,
-        "time_zero": "ADNI baseline visit, preferably Visit_Code == bl",
+        "time_zero": "First CN visit with usable MUSE GM ROI features; prefer bl if available",
         "eligible_baseline_dx": baseline_dx,
         "event_dx": sorted(list(event_dx_set)),
         "event_definition": "First follow-up diagnosis of MCI or AD",
@@ -1630,7 +1791,8 @@ def main():
             "Primary AD L'EPOCH score is the Cox log-risk score. "
             "Acceleration z-score is residualized on retained non-brain covariates. "
             "Model selection enforces nonzero MUSE GM ROI coefficients to ensure that "
-            "the clock remains brain-imaging related."
+            "the clock remains brain-imaging related. Time zero is selected using "
+            "the first CN visit with usable MUSE GM ROI coverage."
         )
     }
 
@@ -1651,6 +1813,11 @@ def main():
     log("ADNI brain MRI AD L'EPOCH complete.")
     log("Main output files:")
     for name in [
+        "hardcoded_muse_gm_roi_presence.tsv",
+        "skipped_participants_before_survival_dataset.tsv",
+        "baseline_muse_gm_roi_coverage.tsv",
+        "muse_gm_roi_qc.tsv",
+        "selected_muse_gm_rois.tsv",
         "survival_dataset.tsv",
         "predictions.tsv",
         "test_predictions.tsv",

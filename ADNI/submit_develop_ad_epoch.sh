@@ -11,6 +11,11 @@ set -euo pipefail
 # ============================================================
 # Build ADNI brain MRI AD L'EPOCH
 # Baseline CN MUSE GM ROI features -> time to MCI/AD conversion
+#
+# Important:
+#   Time zero is defined as the first CN visit with usable MUSE GM
+#   ROI features. Prefer Visit_Code == bl if it has MUSE, otherwise
+#   use the earliest MUSE-available CN visit.
 # ============================================================
 
 WORKDIR="/cbica/home/wenju/Reproducibile_paper/WholeBodyClock/adni_lepoch"
@@ -23,23 +28,11 @@ mkdir -p "${OUTDIR}"
 
 PY_SCRIPT="/cbica/home/wenju/Project/whole-body_clocks/ADNI/ad_epoch.py"
 
-# ------------------------------------------------------------
-# Input ADNI longitudinal file
-# Replace this path with your real ADNI longitudinal MUSE file.
-# Required columns:
-#   PTID, Visit_Code, Date, DX_Binary,
-#   Age, Sex, DLICV, SITE,
-#   MUSE_Volume_* columns
-# ------------------------------------------------------------
-
 ADNI_FILE="/cbica/home/wenju/Reproducibile_paper/WholeBodyClock/adni_lepoch/adni_istaging.tsv"
 
 # ------------------------------------------------------------
 # Python environment
 # ------------------------------------------------------------
-# This script requires:
-#   pandas numpy scikit-learn scikit-survival joblib openpyxl
-#
 
 source activate survival_clock
 
@@ -76,6 +69,7 @@ python3 "${PY_SCRIPT}" \
   --random-state 20260707 \
   --stratify-age-bins 5 \
   --max-feature-missing 0.30 \
+  --min-baseline-roi-fraction 0.80 \
   --l1-ratios "0.1,0.25,0.5,0.75,1.0" \
   --n-alphas 120 \
   --alpha-min-ratio 0.001 \
