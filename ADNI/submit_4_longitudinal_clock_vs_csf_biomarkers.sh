@@ -43,6 +43,7 @@ OUTDIR="${WORKDIR}/longitudinal_change_vs_baseline_csf"
 
 mkdir -p "${LOGDIR}" "${OUTDIR}"
 
+PY_SCRIPT="/cbica/home/wenju//Users/hao/Project/whole-body_clocks/ADNI/ad_epoch_vs_CSF_longitudinal.py"
 
 LONG_FILE="${WORKDIR}/results_brain_mri_ad_lepoch_longitudinal_cn_only/adni_brain_mri_ad_lepoch_longitudinal_cn_only_predictions.tsv"
 
@@ -50,7 +51,7 @@ BASELINE_CSF_FILE="${WORKDIR}/baseline_associations/csf_biomarkers/adni_brain_mr
 
 source activate survival_clock
 
-python "${PY_SCRIPT}" \
+python3 "${PY_SCRIPT}" \
   --longitudinal-file "${LONG_FILE}" \
   --baseline-csf-file "${BASELINE_CSF_FILE}" \
   --outdir "${OUTDIR}" \
