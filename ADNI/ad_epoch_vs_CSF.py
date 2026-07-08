@@ -42,26 +42,43 @@
 #        a) same PTID + selected baseline visit
 #        b) same PTID + ADNI baseline visit
 #        c) nearest CSF visit to selected MRI baseline date within the specified window
+#        d) first available CSF visit if no baseline-proximal match exists
 # 5. Derive APOE4 from APOE4, APOE genotype, or APGEN1/APGEN2 when available.
-# 6. For each CSF biomarker and each group, fit:
-#      CSF biomarker ~ acceleration_z + Age + Sex + ICV + APOE4
-# 7. Save analysis dataset, variable map, group summaries, and association results.
+# 6. Run two complementary association analyses:
+#
+#      A. Within-group models:
+#         CSF biomarker ~ acceleration_z + Age + Sex + ICV + APOE4
+#         separately in:
+#           Non-event & censored
+#           CN-MCI
+#           CN-AD
+#
+#      B. Combined all-group model:
+#         CSF biomarker ~ acceleration_z + conversion_group + Age + Sex + ICV + APOE4
+#         using all 3 groups together, with Non-event & censored as reference group.
+#
+# 7. Save analysis dataset, variable map, group summaries, CSF matching summary,
+#    within-group results, combined group-adjusted results, and the merged table.
 #
 # Major output files
 # ------------------
 #   {prefix}_baseline_csf_analysis_dataset.tsv
 #   {prefix}_baseline_csf_variable_map.tsv
 #   {prefix}_baseline_csf_group_summary.tsv
-#   {prefix}_baseline_csf_associations.tsv
 #   {prefix}_baseline_csf_csf_match_summary.tsv
+#   {prefix}_baseline_csf_within_group_associations.tsv
+#   {prefix}_baseline_csf_combined_group_adjusted_associations.tsv
+#   {prefix}_baseline_csf_associations.tsv
 #   {prefix}_baseline_csf_analysis_summary.json
 #
 # Notes
 # -----
 # - Raw P-values are always saved.
-# - BH-adjusted P-values across all CSF tests are also saved for reference.
-# - If a covariate has zero variance within a group, it is dropped only for that
-#   group-specific regression to avoid rank deficiency; dropped covariates are recorded.
+# - BH-adjusted P-values across all successful CSF tests are also saved for reference.
+# - If a covariate has zero variance within a model, it is dropped only for that
+#   model to avoid rank deficiency; dropped covariates are recorded.
+# - In the combined model, conversion_group is included as dummy variables with
+#   Non-event & censored as the reference level.
 # ============================================================
 
 import argparse
@@ -438,7 +455,7 @@ def attach_csf_to_predictions(pred, raw, args, csf_vars):
                 chosen = nearest.iloc[0]
                 method = "nearest_csf_visit_within_window"
 
-        # Priority 4: first available CSF visit, but flagged as not baseline-proximal.
+        # Priority 4: first available CSF visit, flagged as not baseline-proximal.
         if chosen is None:
             tmp = candidates.copy()
             if tmp["_date"].notna().any():
@@ -606,6 +623,14 @@ def prepare_analysis_dataset(pred_csf, raw, args, csf_vars):
         np.where(sex_norm == "Female", 0.0, np.nan)
     )
 
+    valid_groups = ["Non-event & censored", "CN-MCI", "CN-AD"]
+    d = d.loc[d["conversion_group_3level"].isin(valid_groups)].copy()
+    d["conversion_group_3level"] = pd.Categorical(
+        d["conversion_group_3level"],
+        categories=valid_groups,
+        ordered=True
+    )
+
     variable_map = pd.DataFrame([
         {
             "role": "main_predictor",
@@ -636,6 +661,12 @@ def prepare_analysis_dataset(pred_csf, raw, args, csf_vars):
             "requested": args.apoe4_col,
             "resolved_column": str(d["_apoe4_source_column"].dropna().iloc[0]) if d["_apoe4_source_column"].notna().any() else "NA",
             "method": str(d["_apoe4_method"].dropna().iloc[0]) if d["_apoe4_method"].notna().any() else "NA"
+        },
+        {
+            "role": "combined_model_group_covariate",
+            "requested": "conversion_group_3level",
+            "resolved_column": "conversion_group_3level",
+            "method": "categorical_dummy_variables_reference_Non-event_&_censored"
         }
     ])
 
@@ -655,57 +686,49 @@ def prepare_analysis_dataset(pred_csf, raw, args, csf_vars):
 
 
 # -----------------------------
-# 7. Regression
+# 7. Regression helpers
 # -----------------------------
 
-def fit_ols_one_group(d, outcome, group_name, min_n):
-    sub = d.loc[d["conversion_group_3level"] == group_name].copy()
+def fit_ols_from_predictors(y, predictors, min_n, required_predictor_name="acceleration_z"):
+    """
+    predictors:
+      list of tuples:
+        (name, values, required_bool)
+    """
 
-    sub["_outcome"] = clean_numeric_series(sub[outcome])
+    y = np.asarray(y, dtype=float)
 
-    model_cols = [
-        "_outcome",
-        "_acceleration_z",
-        "_age",
-        "_sex_male",
-        "_icv",
-        "_apoe4"
+    valid = np.isfinite(y)
+    for _, values, _ in predictors:
+        values = np.asarray(values, dtype=float)
+        valid = valid & np.isfinite(values)
+
+    y = y[valid]
+    predictors_clean = [
+        (name, np.asarray(values, dtype=float)[valid], required)
+        for name, values, required in predictors
     ]
 
-    sub = sub[model_cols].replace([np.inf, -np.inf], np.nan).dropna()
-
-    n = sub.shape[0]
+    n = len(y)
 
     if n < min_n:
         return {
-            "group": group_name,
-            "outcome": outcome,
             "n": n,
             "status": "skipped_too_few_complete_cases"
         }
-
-    y = sub["_outcome"].values.astype(float)
-
-    predictors = [
-        ("acceleration_z", sub["_acceleration_z"].values.astype(float), True),
-        ("age", sub["_age"].values.astype(float), False),
-        ("sex_male", sub["_sex_male"].values.astype(float), False),
-        ("icv", sub["_icv"].values.astype(float), False),
-        ("apoe4", sub["_apoe4"].values.astype(float), False)
-    ]
 
     kept_terms = ["intercept"]
     X_parts = [np.ones(n)]
     dropped_terms = []
 
-    for name, values, required_predictor in predictors:
+    for name, values, required in predictors_clean:
         if np.nanstd(values) <= 1e-12:
-            if required_predictor:
+            if required:
                 return {
-                    "group": group_name,
-                    "outcome": outcome,
                     "n": n,
-                    "status": "skipped_acceleration_z_has_zero_variance"
+                    "status": f"skipped_{name}_has_zero_variance",
+                    "terms_kept": ",".join(kept_terms),
+                    "terms_dropped_zero_variance": ",".join(dropped_terms + [name])
                 }
             dropped_terms.append(name)
             continue
@@ -713,12 +736,18 @@ def fit_ols_one_group(d, outcome, group_name, min_n):
         kept_terms.append(name)
         X_parts.append(values)
 
+    if required_predictor_name not in kept_terms:
+        return {
+            "n": n,
+            "status": f"skipped_required_predictor_{required_predictor_name}_not_in_model",
+            "terms_kept": ",".join(kept_terms),
+            "terms_dropped_zero_variance": ",".join(dropped_terms)
+        }
+
     X = np.column_stack(X_parts)
 
     if n <= X.shape[1] + 1:
         return {
-            "group": group_name,
-            "outcome": outcome,
             "n": n,
             "status": "skipped_insufficient_residual_df",
             "terms_kept": ",".join(kept_terms),
@@ -727,8 +756,6 @@ def fit_ols_one_group(d, outcome, group_name, min_n):
 
     if np.linalg.matrix_rank(X) < X.shape[1]:
         return {
-            "group": group_name,
-            "outcome": outcome,
             "n": n,
             "status": "skipped_rank_deficient",
             "terms_kept": ",".join(kept_terms),
@@ -748,7 +775,8 @@ def fit_ols_one_group(d, outcome, group_name, min_n):
     cov_beta = mse * np.linalg.inv(X.T @ X)
     se = np.sqrt(np.diag(cov_beta))
 
-    idx = kept_terms.index("acceleration_z")
+    idx = kept_terms.index(required_predictor_name)
+
     t_stat = beta[idx] / se[idx]
     p_value = 2.0 * stats.t.sf(np.abs(t_stat), df=df_resid)
 
@@ -759,15 +787,13 @@ def fit_ols_one_group(d, outcome, group_name, min_n):
     partial_r2 = (t_stat ** 2) / ((t_stat ** 2) + df_resid)
     partial_r = np.sign(beta[idx]) * np.sqrt(partial_r2)
 
-    x_accel = sub["_acceleration_z"].values.astype(float)
+    required_x = dict((name, values) for name, values, _ in predictors_clean)[required_predictor_name]
     sd_y = np.std(y, ddof=1)
-    sd_x = np.std(x_accel, ddof=1)
+    sd_x = np.std(required_x, ddof=1)
 
     std_beta = beta[idx] * sd_x / sd_y if sd_y > 0 and sd_x > 0 else np.nan
 
-    return {
-        "group": group_name,
-        "outcome": outcome,
+    out = {
         "n": n,
         "status": "ok",
         "beta_acceleration_z": beta[idx],
@@ -783,15 +809,57 @@ def fit_ols_one_group(d, outcome, group_name, min_n):
         "df_resid": df_resid,
         "mean_outcome": float(np.mean(y)),
         "sd_outcome": float(sd_y),
-        "mean_acceleration_z": float(np.mean(x_accel)),
+        "mean_acceleration_z": float(np.mean(required_x)),
         "sd_acceleration_z": float(sd_x),
         "terms_kept": ",".join(kept_terms),
-        "terms_dropped_zero_variance": ",".join(dropped_terms),
-        "model_formula": "CSF ~ acceleration_z + Age + Sex + ICV + APOE4"
+        "terms_dropped_zero_variance": ",".join(dropped_terms)
     }
 
+    for term_name, term_beta, term_se in zip(kept_terms, beta, se):
+        safe = sanitize_name(term_name)
+        out[f"coef_{safe}"] = term_beta
+        out[f"se_{safe}"] = term_se
 
-def run_associations(d, csf_vars, min_n):
+    return out
+
+
+# -----------------------------
+# 8. Within-group regression
+# -----------------------------
+
+def fit_ols_one_group(d, outcome, group_name, min_n):
+    sub = d.loc[d["conversion_group_3level"].astype(str) == group_name].copy()
+
+    sub["_outcome"] = clean_numeric_series(sub[outcome])
+
+    predictors = [
+        ("acceleration_z", sub["_acceleration_z"].values.astype(float), True),
+        ("age", sub["_age"].values.astype(float), False),
+        ("sex_male", sub["_sex_male"].values.astype(float), False),
+        ("icv", sub["_icv"].values.astype(float), False),
+        ("apoe4", sub["_apoe4"].values.astype(float), False)
+    ]
+
+    result = fit_ols_from_predictors(
+        y=sub["_outcome"].values.astype(float),
+        predictors=predictors,
+        min_n=min_n,
+        required_predictor_name="acceleration_z"
+    )
+
+    result.update({
+        "analysis_type": "within_group",
+        "group": group_name,
+        "outcome": outcome,
+        "group_reference": np.nan,
+        "group_covariate_included": False,
+        "model_formula": "CSF ~ acceleration_z + Age + Sex + ICV + APOE4"
+    })
+
+    return result
+
+
+def run_within_group_associations(d, csf_vars, min_n):
     groups = ["Non-event & censored", "CN-MCI", "CN-AD"]
     rows = []
 
@@ -806,21 +874,160 @@ def run_associations(d, csf_vars, min_n):
                 )
             )
 
-    out = pd.DataFrame(rows)
-
-    if "p_raw_acceleration_z" in out.columns:
-        mask = out["status"].eq("ok") & out["p_raw_acceleration_z"].notna()
-        out["p_bh_within_all_csf_tests"] = np.nan
-        if mask.sum() > 0:
-            out.loc[mask, "p_bh_within_all_csf_tests"] = adjust_p_bh(
-                out.loc[mask, "p_raw_acceleration_z"].values
-            )
-
-    return out
+    return pd.DataFrame(rows)
 
 
 # -----------------------------
-# 8. Main
+# 9. Combined all-group regression with group covariate
+# -----------------------------
+
+def fit_ols_combined_group_adjusted(d, outcome, min_n):
+    groups = ["Non-event & censored", "CN-MCI", "CN-AD"]
+
+    sub = d.loc[d["conversion_group_3level"].astype(str).isin(groups)].copy()
+    sub["_outcome"] = clean_numeric_series(sub[outcome])
+
+    group_str = sub["conversion_group_3level"].astype(str)
+
+    cn_mci_dummy = (group_str == "CN-MCI").astype(float).values
+    cn_ad_dummy = (group_str == "CN-AD").astype(float).values
+
+    predictors = [
+        ("acceleration_z", sub["_acceleration_z"].values.astype(float), True),
+        ("group_CN_MCI_vs_non_event", cn_mci_dummy, False),
+        ("group_CN_AD_vs_non_event", cn_ad_dummy, False),
+        ("age", sub["_age"].values.astype(float), False),
+        ("sex_male", sub["_sex_male"].values.astype(float), False),
+        ("icv", sub["_icv"].values.astype(float), False),
+        ("apoe4", sub["_apoe4"].values.astype(float), False)
+    ]
+
+    result = fit_ols_from_predictors(
+        y=sub["_outcome"].values.astype(float),
+        predictors=predictors,
+        min_n=min_n,
+        required_predictor_name="acceleration_z"
+    )
+
+    complete_case_mask = np.isfinite(clean_numeric_series(sub[outcome]).values)
+    complete_case_mask &= np.isfinite(sub["_acceleration_z"].values.astype(float))
+    complete_case_mask &= np.isfinite(sub["_age"].values.astype(float))
+    complete_case_mask &= np.isfinite(sub["_sex_male"].values.astype(float))
+    complete_case_mask &= np.isfinite(sub["_icv"].values.astype(float))
+    complete_case_mask &= np.isfinite(sub["_apoe4"].values.astype(float))
+
+    complete_groups = group_str[complete_case_mask]
+
+    result.update({
+        "analysis_type": "combined_group_adjusted",
+        "group": "All groups combined",
+        "outcome": outcome,
+        "group_reference": "Non-event & censored",
+        "group_covariate_included": True,
+        "n_non_event_censored": int((complete_groups == "Non-event & censored").sum()),
+        "n_cn_mci": int((complete_groups == "CN-MCI").sum()),
+        "n_cn_ad": int((complete_groups == "CN-AD").sum()),
+        "model_formula": "CSF ~ acceleration_z + conversion_group + Age + Sex + ICV + APOE4"
+    })
+
+    return result
+
+
+def run_combined_group_adjusted_associations(d, csf_vars, min_n):
+    rows = []
+
+    for outcome in csf_vars:
+        rows.append(
+            fit_ols_combined_group_adjusted(
+                d=d,
+                outcome=outcome,
+                min_n=min_n
+            )
+        )
+
+    return pd.DataFrame(rows)
+
+
+# -----------------------------
+# 10. Summaries
+# -----------------------------
+
+def add_bh_adjustment(df):
+    df = df.copy()
+
+    if "p_raw_acceleration_z" not in df.columns:
+        df["p_bh_within_all_csf_tests"] = np.nan
+        return df
+
+    mask = df["status"].eq("ok") & df["p_raw_acceleration_z"].notna()
+    df["p_bh_within_all_csf_tests"] = np.nan
+
+    if mask.sum() > 0:
+        df.loc[mask, "p_bh_within_all_csf_tests"] = adjust_p_bh(
+            df.loc[mask, "p_raw_acceleration_z"].values
+        )
+
+    return df
+
+
+def build_group_summary(analysis_df, args, csf_vars):
+    base = analysis_df.groupby(
+        "conversion_group_3level",
+        dropna=False
+    ).agg(
+        n_subjects=(args.id_col, "nunique"),
+        n_rows=(args.id_col, "size"),
+        n_accel_nonmissing=("_acceleration_z", lambda x: int(pd.notna(x).sum())),
+        mean_acceleration_z=("_acceleration_z", "mean"),
+        sd_acceleration_z=("_acceleration_z", "std"),
+        n_age_nonmissing=("_age", lambda x: int(pd.notna(x).sum())),
+        n_icv_nonmissing=("_icv", lambda x: int(pd.notna(x).sum())),
+        n_apoe4_nonmissing=("_apoe4", lambda x: int(pd.notna(x).sum()))
+    ).reset_index()
+
+    for c in csf_vars:
+        tmp = analysis_df.groupby("conversion_group_3level", dropna=False)[c].apply(
+            lambda x: int(pd.notna(x).sum())
+        ).reset_index(name=f"n_{sanitize_name(c)}_nonmissing")
+        base = base.merge(tmp, on="conversion_group_3level", how="left")
+
+    return base
+
+
+def build_combined_complete_case_summary(analysis_df, csf_vars):
+    rows = []
+
+    for c in csf_vars:
+        tmp = analysis_df.copy()
+        tmp["_outcome"] = clean_numeric_series(tmp[c])
+
+        complete = tmp[
+            [
+                "_outcome",
+                "_acceleration_z",
+                "_age",
+                "_sex_male",
+                "_icv",
+                "_apoe4",
+                "conversion_group_3level"
+            ]
+        ].replace([np.inf, -np.inf], np.nan).dropna()
+
+        group_counts = complete["conversion_group_3level"].astype(str).value_counts().to_dict()
+
+        rows.append({
+            "outcome": c,
+            "n_complete_cases_combined": int(complete.shape[0]),
+            "n_non_event_censored": int(group_counts.get("Non-event & censored", 0)),
+            "n_cn_mci": int(group_counts.get("CN-MCI", 0)),
+            "n_cn_ad": int(group_counts.get("CN-AD", 0))
+        })
+
+    return pd.DataFrame(rows)
+
+
+# -----------------------------
+# 11. Main
 # -----------------------------
 
 def main():
@@ -833,6 +1040,7 @@ def main():
 
     log("============================================================")
     log("ADNI baseline L'EPOCH acceleration_z vs CSF biomarkers")
+    log("Now includes combined all-group model with group covariate.")
     log("============================================================")
     log(f"Predictions file: {args.predictions_file}")
     log(f"ADNI file: {args.adni_file}")
@@ -929,22 +1137,11 @@ def main():
         index=False
     )
 
-    group_summary = analysis_df.groupby(
-        "conversion_group_3level",
-        dropna=False
-    ).agg(
-        n_subjects=(args.id_col, "nunique"),
-        n_rows=(args.id_col, "size"),
-        n_accel_nonmissing=("_acceleration_z", lambda x: int(pd.notna(x).sum())),
-        mean_acceleration_z=("_acceleration_z", "mean"),
-        sd_acceleration_z=("_acceleration_z", "std"),
-        n_age_nonmissing=("_age", lambda x: int(pd.notna(x).sum())),
-        n_icv_nonmissing=("_icv", lambda x: int(pd.notna(x).sum())),
-        n_apoe4_nonmissing=("_apoe4", lambda x: int(pd.notna(x).sum())),
-        n_abeta_csf_nonmissing=("Abeta_CSF", lambda x: int(pd.notna(x).sum())) if "Abeta_CSF" in analysis_df.columns else (args.id_col, "size"),
-        n_tau_csf_nonmissing=("Tau_CSF", lambda x: int(pd.notna(x).sum())) if "Tau_CSF" in analysis_df.columns else (args.id_col, "size"),
-        n_ptau_csf_nonmissing=("PTau_CSF", lambda x: int(pd.notna(x).sum())) if "PTau_CSF" in analysis_df.columns else (args.id_col, "size"),
-    ).reset_index()
+    group_summary = build_group_summary(
+        analysis_df=analysis_df,
+        args=args,
+        csf_vars=csf_vars
+    )
 
     group_summary.to_csv(
         outdir / f"{args.prefix}_baseline_csf_group_summary.tsv",
@@ -952,10 +1149,50 @@ def main():
         index=False
     )
 
-    assoc = run_associations(
+    combined_complete_case_summary = build_combined_complete_case_summary(
+        analysis_df=analysis_df,
+        csf_vars=csf_vars
+    )
+
+    combined_complete_case_summary.to_csv(
+        outdir / f"{args.prefix}_baseline_csf_combined_complete_case_summary.tsv",
+        sep="\t",
+        index=False
+    )
+
+    within_group_assoc = run_within_group_associations(
         d=analysis_df,
         csf_vars=csf_vars,
         min_n=args.min_n
+    )
+
+    combined_assoc = run_combined_group_adjusted_associations(
+        d=analysis_df,
+        csf_vars=csf_vars,
+        min_n=args.min_n
+    )
+
+    assoc = pd.concat(
+        [within_group_assoc, combined_assoc],
+        axis=0,
+        ignore_index=True,
+        sort=False
+    )
+
+    within_group_assoc = add_bh_adjustment(within_group_assoc)
+    combined_assoc = add_bh_adjustment(combined_assoc)
+    assoc = add_bh_adjustment(assoc)
+
+    within_group_assoc.to_csv(
+        outdir / f"{args.prefix}_baseline_csf_within_group_associations.tsv",
+        sep="\t",
+        index=False
+    )
+
+    combined_assoc.to_csv(
+        outdir / f"{args.prefix}_baseline_csf_combined_group_adjusted_associations.tsv",
+        sep="\t",
+        index=False
     )
 
     assoc.to_csv(
@@ -973,7 +1210,9 @@ def main():
         "groups": ["Non-event & censored", "CN-MCI", "CN-AD"],
         "main_predictor": args.accel_col,
         "covariates": ["Age", "Sex", "ICV", "APOE4"],
-        "model": "CSF biomarker ~ acceleration_z + Age + Sex + ICV + APOE4",
+        "within_group_model": "CSF biomarker ~ acceleration_z + Age + Sex + ICV + APOE4",
+        "combined_group_adjusted_model": "CSF biomarker ~ acceleration_z + conversion_group + Age + Sex + ICV + APOE4",
+        "combined_group_reference": "Non-event & censored",
         "csf_matching_priority": [
             "same_selected_baseline_visit",
             "adni_baseline_visit",
@@ -987,7 +1226,10 @@ def main():
             "variable_map": str(outdir / f"{args.prefix}_baseline_csf_variable_map.tsv"),
             "group_summary": str(outdir / f"{args.prefix}_baseline_csf_group_summary.tsv"),
             "csf_match_summary": str(outdir / f"{args.prefix}_baseline_csf_csf_match_summary.tsv"),
-            "associations": str(outdir / f"{args.prefix}_baseline_csf_associations.tsv")
+            "combined_complete_case_summary": str(outdir / f"{args.prefix}_baseline_csf_combined_complete_case_summary.tsv"),
+            "within_group_associations": str(outdir / f"{args.prefix}_baseline_csf_within_group_associations.tsv"),
+            "combined_group_adjusted_associations": str(outdir / f"{args.prefix}_baseline_csf_combined_group_adjusted_associations.tsv"),
+            "all_associations": str(outdir / f"{args.prefix}_baseline_csf_associations.tsv")
         }
     }
 
@@ -997,7 +1239,11 @@ def main():
     log("============================================================")
     log("Done.")
     log(f"Analysis dataset: {outdir / f'{args.prefix}_baseline_csf_analysis_dataset.tsv'}")
-    log(f"Association table: {outdir / f'{args.prefix}_baseline_csf_associations.tsv'}")
+    log(f"Within-group association table: {outdir / f'{args.prefix}_baseline_csf_within_group_associations.tsv'}")
+    log(f"Combined group-adjusted association table: {outdir / f'{args.prefix}_baseline_csf_combined_group_adjusted_associations.tsv'}")
+    log(f"All association table: {outdir / f'{args.prefix}_baseline_csf_associations.tsv'}")
+    log("Combined complete-case summary:")
+    log(combined_complete_case_summary.to_string(index=False))
     log("CSF match summary:")
     log(csf_match_summary.to_string(index=False))
     log("Group summary:")
