@@ -43,7 +43,7 @@ OUTDIR="${WORKDIR}/longitudinal_change_vs_baseline_csf"
 
 mkdir -p "${LOGDIR}" "${OUTDIR}"
 
-PY_SCRIPT="/cbica/home/wenju//Users/hao/Project/whole-body_clocks/ADNI/ad_epoch_vs_CSF_longitudinal.py"
+PY_SCRIPT="/cbica/home/wenju/Project/whole-body_clocks/ADNI/ad_epoch_vs_CSF_longitudinal.py"
 
 LONG_FILE="${WORKDIR}/results_brain_mri_ad_lepoch_longitudinal_cn_only/adni_brain_mri_ad_lepoch_longitudinal_cn_only_predictions.tsv"
 
