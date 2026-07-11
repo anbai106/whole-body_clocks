@@ -18,8 +18,8 @@
 #   - open triangle = significant but scale issue
 #   - open circle = non-significant + stable scale
 #   - cross = non-significant + scale issue
-#   - x-axis = -abs(max CI) to +abs(max CI)
-#   - labels to right show N, cases, and CI
+#   - x-axis fixed manually to -0.1 to +0.1
+#   - right-side labels show CASES ONLY
 #
 # Diseases:
 #   asthma, dementia, copd, mi, stroke
@@ -113,7 +113,6 @@ theme_clock <- function(base_size = 12) {
     )
 }
 
-# Van-Gogh-inspired, high-contrast, colorblind-conscious palette.
 vangogh23 <- c(
   "#1F4E79", "#2E86AB", "#3A86FF", "#00A5CF", "#148F77",
   "#2A9D8F", "#4DAA57", "#84A59D", "#6A4C93", "#8E44AD",
@@ -122,7 +121,6 @@ vangogh23 <- c(
   "#7D6608", "#566573", "#17202A"
 )
 
-# Shape 2 = open / non-filled triangle.
 shape_values <- c(
   "Good: significant + stable scale" = 16,
   "Significant but scale issue" = 2,
@@ -226,6 +224,25 @@ format_n_cases_label <- function(n_total, n_events) {
     ),
     is.finite(n_events) ~ paste0("cases=", scales::comma(round(n_events))),
     TRUE ~ "N/cases=NA"
+  )
+}
+
+# ------------------------------------------------------------
+# New helper:
+#   annotate CASES ONLY, no N, no CI, no delta, no P.
+# ------------------------------------------------------------
+
+format_cases_only_label <- function(n_events) {
+  case_when(
+    is.finite(n_events) ~ paste0("cases=", scales::comma(round(n_events))),
+    TRUE ~ "cases=NA"
+  )
+}
+
+format_cases_only_number <- function(n_events) {
+  case_when(
+    is.finite(n_events) ~ scales::comma(round(n_events)),
+    TRUE ~ ""
   )
 }
 
@@ -818,11 +835,16 @@ plot_tbl <- clock_manifest %>%
       n_events_final
     ),
     
-    forest_label = paste0(
-      n_cases_text,
-      "; ",
-      ci_text
-    ),
+    # --------------------------------------------------------
+    # Revised annotation fields:
+    #   forest_label shows CASES ONLY.
+    #   matrix_label shows CASES ONLY.
+    # --------------------------------------------------------
+    
+    cases_only_text = format_cases_only_label(n_events_final),
+    cases_only_number = format_cases_only_number(n_events_final),
+    
+    forest_label = cases_only_text,
     
     delta_label = ifelse(
       is.finite(delta_cindex),
@@ -891,11 +913,9 @@ message("\nMain-text keep clocks:")
 print(main_text_tbl, n = Inf)
 
 # ============================================================
-# 9. Figure 1: faceted forest plot with annotations
+# 9. Figure 1: faceted forest plot with CASES-ONLY annotation
 # ============================================================
 
-# Axis scale is determined only by CI values:
-#   xlim = -abs(max CI) to +abs(max CI)
 x_vals_ci <- c(
   plot_tbl$delta_cindex_ci_lower,
   plot_tbl$delta_cindex_ci_upper
@@ -912,7 +932,8 @@ if (length(x_vals_ci) == 0) {
   stop("No finite ΔC-index or CI values found.")
 }
 
-x_abs_ci <- max(abs(x_vals_ci), na.rm = TRUE)
+# Manually fixed x-axis limit requested by user.
+x_abs_ci <- 0.1
 
 # Guard against degenerate scales.
 x_abs_ci <- max(x_abs_ci, 0.005)
@@ -972,7 +993,7 @@ p_forest <- ggplot(plot_tbl_forest, aes(y = clock_label)) +
       label = forest_label
     ),
     hjust = 0,
-    size = 2.05,
+    size = 2.15,
     color = "#17202A",
     na.rm = TRUE
   ) +
@@ -1002,7 +1023,8 @@ p_forest <- ggplot(plot_tbl_forest, aes(y = clock_label)) +
     subtitle = paste0(
       "Effect size is test-set ΔC-index = M3 full model − M1 covariate baseline; ",
       "horizontal bars show 95% CI. ",
-      "The x-axis is fixed to −abs(max CI) to +abs(max CI)."
+      "The x-axis is fixed to −0.100 to +0.100. ",
+      "Right-side annotations show cases only."
     ),
     x = "Test-set ΔC-index beyond covariates, M3 − M1",
     y = NULL,
@@ -1010,8 +1032,9 @@ p_forest <- ggplot(plot_tbl_forest, aes(y = clock_label)) +
     caption = paste0(
       "Good clocks are significant for M3−M1 and pass year-scale QC. ",
       "Open triangles indicate significant clocks with scale issues. ",
-      "Right-side labels show N, cases, and ΔC-index 95% CI. ",
-      "Colors identify the 23 clocks and are kept consistent across diseases."
+      "Open circles indicate non-significant clocks with stable scale. ",
+      "Crosses indicate non-significant clocks with scale issues. ",
+      "Right-side labels show cases only."
     )
   ) +
   theme_clock(base_size = 11) +
@@ -1021,7 +1044,7 @@ p_forest <- ggplot(plot_tbl_forest, aes(y = clock_label)) +
     legend.position = "bottom",
     legend.text = element_text(size = 9),
     panel.spacing.x = unit(2.2, "lines"),
-    plot.margin = margin(t = 8, r = 160, b = 8, l = 8)
+    plot.margin = margin(t = 8, r = 120, b = 8, l = 8)
   ) +
   guides(
     shape = guide_legend(
@@ -1071,7 +1094,7 @@ ggsave(
 )
 
 # ============================================================
-# 10. Figure 2: disease-by-clock matrix
+# 10. Figure 2: disease-by-clock matrix with CASES-ONLY annotation
 # ============================================================
 
 p_matrix <- plot_tbl %>%
@@ -1096,7 +1119,7 @@ p_matrix <- plot_tbl %>%
   ) +
   geom_text(
     aes(
-      label = ifelse(is.finite(delta_cindex), sprintf("%+.3f", delta_cindex), "")
+      label = cases_only_number
     ),
     nudge_x = 0.29,
     size = 2.25,
@@ -1120,7 +1143,8 @@ p_matrix <- plot_tbl %>%
     title = "Disease-by-clock map of incremental value and year-scale QC",
     subtitle = paste0(
       "Rows are the 23 disease clocks and columns are the five diseases. ",
-      "Numbers show test-set ΔC-index, M3 − M1. ",
+      "Point size shows |ΔC-index|. ",
+      "Numbers show cases only. ",
       "Shape indicates whether the clock is significant and scale-stable."
     ),
     x = NULL,
@@ -1187,7 +1211,7 @@ combined_fig <- p_forest / p_matrix +
   plot_annotation(
     title = "Cross-disease L’EPOCH clock prioritization",
     subtitle = "Combining incremental predictive value beyond covariates with year-scale QC across 115 disease clocks.",
-    caption = "Main-text candidates are clocks with significant positive M3−M1 ΔC-index and stable year-scale QC.",
+    caption = "Main-text candidates are clocks with significant positive M3−M1 ΔC-index and stable year-scale QC. Numeric annotations show cases only.",
     theme = theme(
       plot.title = element_text(face = "bold", size = 20, color = "#17202A"),
       plot.subtitle = element_text(size = 11, color = "#566573"),
@@ -1257,10 +1281,10 @@ message("  Main-text good clocks:")
 message("    ", main_text_out)
 
 message("\nFigures:")
-message("  Forest with symmetric CI-based x-axis and annotation:")
+message("  Forest with fixed x-axis and CASES-ONLY annotation:")
 message("    ", out_forest_pdf)
 message("    ", out_forest_png)
-message("  Matrix:")
+message("  Matrix with CASES-ONLY annotation:")
 message("    ", out_matrix_pdf)
 message("    ", out_matrix_png)
 message("  Combined:")
@@ -1272,6 +1296,6 @@ message("  - Good: significant + stable scale = recommended main-text clocks.")
 message("  - Open triangle = significant M3-M1 but scale issue.")
 message("  - Open circle = non-significant but stable scale.")
 message("  - Cross = non-significant and scale issue.")
-message("  - Forest x-axis is fixed to -abs(max CI) to +abs(max CI).")
-message("  - Right-side forest labels show N, cases, and ΔC-index 95% CI.")
+message("  - Forest x-axis is fixed to -0.1 to +0.1.")
+message("  - Numeric annotations show cases only.")
 message("============================================================")

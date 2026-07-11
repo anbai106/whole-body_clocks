@@ -4,7 +4,7 @@
 # MRI + proteomics + metabolomics mortality clocks
 # Generalized RStudio-ready direct-run script for 23 expected clocks
 # ============================================================
-.libPaths('/gpfs/fs001/cbica/home/wenju/R/x86_64-pc-linux-gnu-library/4.3')
+.libPaths('/gpfs/fs001/Users/hao/cubic-home/R/x86_64-pc-linux-gnu-library/4.3')
 suppressPackageStartupMessages({
   library(tidyverse)
   library(glue)
@@ -17,8 +17,8 @@ suppressPackageStartupMessages({
 
 # The script automatically chooses the first existing root directory.
 clock_root_candidates <- c(
-  "/cbica/home/wenju/Reproducibile_paper/WholeBodyClock",
-  "/cbica/home/wenju/Reproducibile_paper/WholeBodyClock",
+  "/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock",
+  "/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock",
   getwd()
 )
 
@@ -30,8 +30,8 @@ if (is.na(clock_root) || is.null(clock_root)) {
 # Aging-clock file(s). If multiple files exist, they are full-joined by participant_id.
 # MomoBAG.tsv is expected to contain MRIBAG/ProtBAG/MetBAG columns in your workflow.
 aging_clock_file_candidates <- c(
-  "/cbica/home/wenju/Reproducibile_paper/SleepAging/data/MomoBAG.tsv",
-  "/cbica/home/wenju/Reproducibile_paper/SleepAging/data/MomoBAG.tsv",
+  "/Users/hao/cubic-home/Reproducibile_paper/SleepAging/data/MomoBAG.tsv",
+  "/Users/hao/cubic-home/Reproducibile_paper/SleepAging/data/MomoBAG.tsv",
   file.path(clock_root, "MomoBAG.tsv"),
   file.path(clock_root, "all_BAG.tsv"),
   file.path(clock_root, "all_BAGs.tsv"),
@@ -535,7 +535,7 @@ make_clock_scatter <- function(meta_row) {
       label = stat_text,
       hjust = 0,
       vjust = 1,
-      size = 4.9,
+      size = 2.9,
       color = stat_color,
       fontface = "italic"
     ) +
@@ -650,55 +650,173 @@ message("  ", files_file)
 
 # ============================================================
 # 8. Combined multi-panel figure
+#    Revised: shorter x/y labels for combined plot
 # ============================================================
 
 # Order by modality and then by absolute Pearson R within modality.
 clock_order_tbl <- all_stats %>%
-  mutate(modality = factor(modality, levels = c("MRI", "Proteomics", "Metabolomics"))) %>%
+  mutate(
+    modality = factor(
+      modality,
+      levels = c("MRI", "Proteomics", "Metabolomics")
+    )
+  ) %>%
   arrange(modality, desc(abs(pearson_r))) %>%
   mutate(clock_plot = paste0(clock_label, "  "))
 
 clock_levels <- clock_order_tbl$clock_plot
 
 plot_list <- purrr::map(results, "plot")
+
 plot_meta <- purrr::map_dfr(results, "stats") %>%
-  left_join(clock_order_tbl %>% select(clock_id, clock_plot), by = "clock_id") %>%
+  left_join(
+    clock_order_tbl %>% select(clock_id, clock_plot),
+    by = "clock_id"
+  ) %>%
   mutate(clock_plot = factor(clock_plot, levels = clock_levels))
 
 # Reorder the individual plot list according to clock_order_tbl.
 plot_lookup <- setNames(plot_list, purrr::map_chr(results, "clock_id"))
 plot_list_ordered <- purrr::map(clock_order_tbl$clock_id, ~ plot_lookup[[.x]])
 
-plot_list_named <- purrr::map2(plot_list_ordered, seq_len(nrow(clock_order_tbl)), function(p, idx) {
-  label <- clock_order_tbl$clock_label[[idx]]
-  p + ggtitle(label) +
-    theme(
-      plot.title = element_text(face = "bold", hjust = 0.02, size = 12, color = "#17202A")
+# ------------------------------------------------------------
+# Helper: reduce annotation text size inside each subplot.
+# This targets the correlation annotation layer added by annotate("text", ...).
+# ------------------------------------------------------------
+
+shrink_text_layers <- function(p, text_size = 2.15) {
+  for (ii in seq_along(p$layers)) {
+    geom_class <- class(p$layers[[ii]]$geom)[1]
+    
+    if (geom_class %in% c("GeomText", "GeomLabel")) {
+      p$layers[[ii]]$aes_params$size <- text_size
+    }
+  }
+  
+  p
+}
+
+# ------------------------------------------------------------
+# Smaller theme values for the combined multi-panel figure.
+# ------------------------------------------------------------
+
+combined_panel_title_size <- 9.5
+combined_axis_title_size <- 7.0
+combined_axis_text_size <- 9
+combined_stat_text_size <- 4
+
+plot_list_named <- purrr::map2(
+  plot_list_ordered,
+  seq_len(nrow(clock_order_tbl)),
+  function(p, idx) {
+    label <- clock_order_tbl$clock_label[[idx]]
+    
+    p_small <- shrink_text_layers(
+      p,
+      text_size = combined_stat_text_size
     )
-})
+    
+    p_small +
+      ggtitle(label) +
+      
+      # Main requested change:
+      # replace long organ/modality-specific axis labels
+      # with concise labels for the combined figure.
+      labs(
+        x = "Aging clock",
+        y = "Mortality clock"
+      ) +
+      
+      theme(
+        plot.title = element_text(
+          face = "bold",
+          hjust = 0.02,
+          size = combined_panel_title_size,
+          color = "#17202A"
+        ),
+        
+        axis.title.x = element_text(
+          size = combined_axis_title_size,
+          face = "bold",
+          color = "#222222",
+          margin = margin(t = 4)
+        ),
+        axis.title.y = element_text(
+          size = combined_axis_title_size,
+          face = "bold",
+          color = "#222222",
+          margin = margin(r = 4)
+        ),
+        
+        axis.text.x = element_text(
+          size = combined_axis_text_size,
+          color = "#333333"
+        ),
+        axis.text.y = element_text(
+          size = combined_axis_text_size,
+          color = "#333333"
+        ),
+        
+        plot.margin = margin(6, 6, 5, 5)
+      )
+  }
+)
 
 combined_plot <- wrap_plots(plot_list_named, ncol = 4) +
   plot_annotation(
-    title = "Aging clocks versus mortality-clock acceleration across modalities",
-    subtitle = glue("Held-out {analysis_split_label}. MRI uses MRIBAG columns, with Brain MRI read from Brain_PhenoBAG when present; proteomics uses ProtBAG-like columns; metabolomics uses MetBAG-like columns."),
+    title = "",
+    subtitle = "",
     theme = theme(
-      plot.title = element_text(face = "bold", size = 18, color = "#17202A"),
-      plot.subtitle = element_text(size = 11, color = "#566573")
+      plot.title = element_text(
+        face = "bold",
+        size = 14,
+        color = "#17202A"
+      ),
+      plot.subtitle = element_text(
+        size = 9,
+        color = "#566573"
+      )
     )
   )
 
-combined_pdf <- file.path(combined_outdir, "all_mortality_clocks_vs_aging_clocks_test_scatter.pdf")
-combined_png <- file.path(combined_outdir, "all_mortality_clocks_vs_aging_clocks_test_scatter.png")
+combined_pdf <- file.path(
+  combined_outdir,
+  "all_mortality_clocks_vs_aging_clocks_test_scatter.pdf"
+)
+
+combined_png <- file.path(
+  combined_outdir,
+  "all_mortality_clocks_vs_aging_clocks_test_scatter.png"
+)
 
 print(combined_plot)
 
 combined_height <- max(13, ceiling(length(plot_list_named) / 4) * 4.2)
+
 if (capabilities("cairo")) {
-  ggsave(filename = combined_pdf, plot = combined_plot, width = 20, height = combined_height, device = cairo_pdf)
+  ggsave(
+    filename = combined_pdf,
+    plot = combined_plot,
+    width = 20,
+    height = combined_height,
+    device = cairo_pdf
+  )
 } else {
-  ggsave(filename = combined_pdf, plot = combined_plot, width = 20, height = combined_height)
+  ggsave(
+    filename = combined_pdf,
+    plot = combined_plot,
+    width = 20,
+    height = combined_height
+  )
 }
-ggsave(filename = combined_png, plot = combined_plot, width = 20, height = combined_height, dpi = 350)
+
+ggsave(
+  filename = combined_png,
+  plot = combined_plot,
+  width = 20,
+  height = combined_height,
+  dpi = 350
+)
 
 message("Saved combined scatter figure:")
 message("  ", combined_pdf)
