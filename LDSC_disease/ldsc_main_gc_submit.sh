@@ -48,4 +48,4 @@ echo "Input sumstats: ${stat_gz1}"
 echo "LDSC output directory: ${ldsc_out_dir}"
 echo "Output prefix: ${output_file}"
 
-bash /cbica/home/wenju/Project/whole-body_clocks/mortality_clock/LDSC/ldsc_main_gc.sh "${stat_gz1}" "${output_file}"
+bash /cbica/home/wenju/Project/whole-body_clocks/LDSC_disease/ldsc_main_gc.sh "${stat_gz1}" "${output_file}"

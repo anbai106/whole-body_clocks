@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --partition=all
 #SBATCH --job-name=ArrayJob
-#SBATCH --array=0-21
+#SBATCH --array=0-46
 #SBATCH --mem-per-cpu=12G
 #SBATCH --time=0-01:59:00
 #SBATCH --output=/cbica/home/wenju/output/LDSC_h2_%A_%a.out
@@ -9,36 +9,34 @@
 
 set -euo pipefail
 
-base_dir="/cbica/home/wenju/Reproducibile_paper/WholeBodyClock/mortality_clock/fastGWA/output"
+base_dir="/cbica/home/wenju/Reproducibile_paper/WholeBodyClock"
 
-# Collect all munged LDSC sumstats files in a stable sorted order
-mapfile -t stat_files < <(
-  find "${base_dir}" \
-    -mindepth 2 \
-    -maxdepth 2 \
-    -type f \
-    -name "organ_pheno_normalized_residualized.fastGWA.ldsc.sumstats.gz" \
-  | sort
-)
+# Collect all fastGWA files in a stable sorted order
+source_files=(Brain_proteomics_dementia_clock        Heart_proteomics_dementia_clock      Immune_proteomics_stroke_clock
+Brain_proteomics_mi_clock              Heart_proteomics_mi_clock            Metabolic_metabolomics_asthma_clock
+Brain_proteomics_stroke_clock          Hepatic_metabolomics_asthma_clock    Metabolic_metabolomics_dementia_clock
+Digestive_metabolomics_asthma_clock    Hepatic_metabolomics_dementia_clock  Metabolic_metabolomics_stroke_clock
+Digestive_metabolomics_dementia_clock  Hepatic_metabolomics_mi_clock        Pulmonary_proteomics_mi_clock
+Digestive_metabolomics_mi_clock        Hepatic_metabolomics_stroke_clock    Pulmonary_proteomics_stroke_clock
+Digestive_metabolomics_stroke_clock    Hepatic_proteomics_asthma_clock      Reproductive_female_proteomics_asthma_clock
+Endocrine_metabolomics_asthma_clock    Hepatic_proteomics_dementia_clock    Reproductive_female_proteomics_copd_clock
+Endocrine_metabolomics_dementia_clock  Hepatic_proteomics_mi_clock          Reproductive_female_proteomics_dementia_clock
+Endocrine_metabolomics_mi_clock        Hepatic_proteomics_stroke_clock      Reproductive_female_proteomics_mi_clock
+Endocrine_metabolomics_stroke_clock    Immune_metabolomics_asthma_clock     Reproductive_female_proteomics_stroke_clock
+Endocrine_proteomics_asthma_clock      Immune_metabolomics_mi_clock         Reproductive_male_proteomics_dementia_clock
+Endocrine_proteomics_dementia_clock    Immune_metabolomics_stroke_clock     Reproductive_male_proteomics_mi_clock
+Endocrine_proteomics_mi_clock          Immune_proteomics_asthma_clock       Reproductive_male_proteomics_stroke_clock
+Endocrine_proteomics_stroke_clock      Immune_proteomics_dementia_clock     spleen_mri_asthma_clock
+heart_mri_copd_clock                   Immune_proteomics_mi_clock)
 
-# Sanity check
-n_files=${#stat_files[@]}
-echo "Found ${n_files} LDSC sumstats files."
+organ_dir="${source_files[$SLURM_ARRAY_TASK_ID]}"
 
-if [[ "${SLURM_ARRAY_TASK_ID}" -ge "${n_files}" ]]; then
-  echo "ERROR: SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID} but only ${n_files} files found."
-  exit 1
-fi
-
-stat_gz1="${stat_files[$SLURM_ARRAY_TASK_ID]}"
-
-organ_dir_path=$(dirname "${stat_gz1}")
-organ_dir=$(basename "${organ_dir_path}")
-organ="${organ_dir%_mortality_clock}"
+stat_gz1=${base_dir}/${organ_dir}/fastGWA/output/organ_pheno_normalized_residualized.fastGWA.ldsc.sumstats.gz
 
 # Create LDSC output subfolder inside the corresponding organ-clock folder
-ldsc_out_dir="${organ_dir_path}/ldsc"
+ldsc_out_dir="${base_dir}/${organ_dir}/fastGWA/ldsc"
 mkdir -p "${ldsc_out_dir}"
+organ="${organ_dir%%_*}"
 
 # Output prefix for LDSC main analysis
 output_file="${ldsc_out_dir}/${organ}_h2"
@@ -50,4 +48,4 @@ echo "Input sumstats: ${stat_gz1}"
 echo "LDSC output directory: ${ldsc_out_dir}"
 echo "Output prefix: ${output_file}"
 
-bash /cbica/home/wenju/Project/whole-body_clocks/mortality_clock/LDSC/ldsc_h2.sh ${stat_gz1} ${output_file}
+bash /cbica/home/wenju/Project/whole-body_clocks/LDSC_disease/ldsc_h2.sh ${stat_gz1} ${output_file}
