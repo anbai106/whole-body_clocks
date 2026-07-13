@@ -8,5 +8,5 @@
 
 module load python/anaconda/3
 source activate DNE
-bash /cbica/home/wenju/Project/whole-body_clocks/LDSC_disease/collect_gc_results.py
+python /cbica/home/wenju/Project/whole-body_clocks/LDSC_disease/collect_gc_results.py
 conda deactivate
