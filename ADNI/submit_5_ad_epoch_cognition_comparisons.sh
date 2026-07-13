@@ -8,9 +8,7 @@
 
 set -euo pipefail
 
-source ~/.bashrc || true
-
-conda activate wholebodyclock || conda activate lepoch || true
+source activate survival_clock
 
 PY_SCRIPT="/cbica/home/wenju/Project/whole-body_clocks/ADNI/ad_epoch_cognition.py"
 
