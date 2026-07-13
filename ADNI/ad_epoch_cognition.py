@@ -3,7 +3,6 @@
 import argparse
 import glob
 import os
-import re
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -15,8 +14,9 @@ from scipy import stats
 # Exact ADNI iSTAGING column names
 # ============================================================
 
-ID_COL = "participant_id"
+ID_COL = "PTID"
 DATE_COL = "Date"
+ID_CANDIDATES = ["PTID", "participant_id", "RID"]
 
 COGNITIVE_COLS = [
     "Animal_Fluency",
@@ -49,6 +49,8 @@ DEFAULT_EPOCH_COL_CANDIDATES = [
     "adni_brain_mri_ad_epoch_clock_acceleration_z",
     "adni_brain_mri_ad_lepoch_acceleration_years",
     "adni_brain_mri_ad_lepoch_clock_acceleration_years",
+    "adni_brain_mri_ad_epoch_acceleration_years",
+    "adni_brain_mri_ad_epoch_clock_acceleration_years",
     "adni_brain_mri_ad_lepoch_risk_score",
     "adni_brain_mri_ad_epoch_risk_score",
 ]
@@ -60,12 +62,12 @@ DEFAULT_EPOCH_COL_CANDIDATES = [
 
 def read_table(path: str) -> pd.DataFrame:
     if path.endswith(".tsv") or path.endswith(".txt"):
-        return pd.read_csv(path, sep="\t")
+        return pd.read_csv(path, sep="\t", low_memory=False)
     if path.endswith(".csv"):
-        return pd.read_csv(path)
+        return pd.read_csv(path, low_memory=False)
     if path.endswith(".xlsx"):
         return pd.read_excel(path)
-    return pd.read_csv(path, sep="\t")
+    return pd.read_csv(path, sep="\t", low_memory=False)
 
 
 def normalize_id_series(s: pd.Series) -> pd.Series:
@@ -78,6 +80,16 @@ def require_columns(df: pd.DataFrame, cols: List[str], label: str):
     missing = [c for c in cols if c not in df.columns]
     if missing:
         raise ValueError(f"Missing required columns in {label}: {missing}")
+
+
+def find_id_col(df: pd.DataFrame, label: str) -> str:
+    for c in ID_CANDIDATES:
+        if c in df.columns:
+            return c
+    raise ValueError(
+        f"Could not find an ADNI ID column in {label}. "
+        f"Tried: {ID_CANDIDATES}. Available columns include: {list(df.columns)[:40]}"
+    )
 
 
 def parse_dates(s: pd.Series) -> pd.Series:
@@ -97,6 +109,7 @@ def parse_dates(s: pd.Series) -> pd.Series:
 def numeric_clean(s: pd.Series) -> pd.Series:
     if pd.api.types.is_numeric_dtype(s):
         return pd.to_numeric(s, errors="coerce")
+
     x = s.astype(str).str.strip()
     x = x.str.replace(",", "", regex=False)
     x = x.str.replace("<", "", regex=False)
@@ -120,14 +133,21 @@ def resolve_prediction_file(path_or_dir: str, prefer_longitudinal: bool = False)
     if not os.path.isdir(path_or_dir):
         raise FileNotFoundError(f"Cannot find AD EPOCH path: {path_or_dir}")
 
-    patterns = ["*predictions*.tsv", "*prediction*.tsv", "*.tsv"]
+    patterns = [
+        "*predictions*.tsv",
+        "*prediction*.tsv",
+        "*longitudinal*.tsv",
+        "*.tsv",
+    ]
+
     files = []
     for pat in patterns:
         files.extend(glob.glob(os.path.join(path_or_dir, pat)))
+
     files = sorted(set(files))
 
     if len(files) == 0:
-        raise FileNotFoundError(f"No TSV files found under: {path_or_dir}")
+        raise FileNotFoundError(f"No TSV prediction files found under: {path_or_dir}")
 
     def score_file(p: str) -> int:
         b = os.path.basename(p).lower()
@@ -140,7 +160,7 @@ def resolve_prediction_file(path_or_dir: str, prefer_longitudinal: bool = False)
             score += 20
         if "test" in b:
             score -= 20
-        if "summary" in b or "manifest" in b or "coefficient" in b:
+        if "summary" in b or "manifest" in b or "coefficient" in b or "performance" in b:
             score -= 50
         return score
 
@@ -158,9 +178,15 @@ def detect_epoch_col(df: pd.DataFrame, requested_col: str = "auto") -> str:
         if c in df.columns:
             return c
 
-    # Prefer acceleration z, then acceleration years, then risk score.
     lower_cols = [(c, c.lower()) for c in df.columns]
-    for key in ["acceleration_z", "clock_acceleration_z", "acceleration_year", "risk_score"]:
+
+    for key in [
+        "acceleration_z",
+        "clock_acceleration_z",
+        "acceleration_year",
+        "clock_acceleration_year",
+        "risk_score",
+    ]:
         hits = [
             c for c, cl in lower_cols
             if key in cl and ("ad" in cl or "epoch" in cl or "lepoch" in cl)
@@ -179,18 +205,30 @@ def detect_epoch_col(df: pd.DataFrame, requested_col: str = "auto") -> str:
 
 
 def detect_date_col(df: pd.DataFrame) -> Optional[str]:
-    for c in ["Date", "EXAMDATE", "scan_date", "Scan_Date", "MRI_Date", "epoch_date", "baseline_date"]:
+    for c in [
+        "Date",
+        "EXAMDATE",
+        "ExamDate",
+        "scan_date",
+        "Scan_Date",
+        "MRI_Date",
+        "MRI_date",
+        "epoch_date",
+        "baseline_date",
+        "selected_baseline_date",
+    ]:
         if c in df.columns:
             return c
     return None
 
 
 # ============================================================
-# Load ADNI and AD EPOCH scores
+# Load ADNI iSTAGING and AD EPOCH scores
 # ============================================================
 
 def load_adni_istaging(path: str) -> pd.DataFrame:
     df = read_table(path)
+
     exact_needed = [ID_COL, DATE_COL] + COGNITIVE_COLS + COMPARATOR_BIOMARKER_COLS + COVARIATE_COLS
     require_columns(df, exact_needed, "ADNI iSTAGING table")
 
@@ -199,8 +237,18 @@ def load_adni_istaging(path: str) -> pd.DataFrame:
     df[DATE_COL] = parse_dates(df[DATE_COL])
     df = df[df[DATE_COL].notna()].copy()
 
-    for c in COGNITIVE_COLS + COMPARATOR_BIOMARKER_COLS + ["Age", "Education_Years", "APOE4_Alleles", "DLICV"]:
+    numeric_cols = (
+        COGNITIVE_COLS
+        + COMPARATOR_BIOMARKER_COLS
+        + ["Age", "Education_Years", "APOE4_Alleles", "DLICV"]
+    )
+
+    for c in numeric_cols:
         df[c] = numeric_clean(df[c])
+
+    print("[INFO] ADNI iSTAGING loaded")
+    print(f"       rows with valid Date: {len(df):,}")
+    print(f"       unique PTID: {df[ID_COL].nunique():,}")
 
     return df
 
@@ -214,20 +262,22 @@ def load_epoch_scores(
     path = resolve_prediction_file(path_or_dir, prefer_longitudinal=prefer_longitudinal)
     df = read_table(path)
 
-    if ID_COL not in df.columns:
-        raise ValueError(f"AD EPOCH prediction file must contain {ID_COL}: {path}")
-
+    id_col = find_id_col(df, f"AD EPOCH prediction file: {path}")
     epoch_col = detect_epoch_col(df, requested_col=requested_col)
     date_col = detect_date_col(df)
 
-    keep = [ID_COL, epoch_col]
-    if date_col is not None:
+    keep = [id_col, epoch_col]
+    if date_col is not None and date_col not in keep:
         keep.append(date_col)
 
     out = df[keep].copy()
+    out = out.rename(columns={id_col: ID_COL})
     out[ID_COL] = normalize_id_series(out[ID_COL])
+
     out[value_name] = numeric_clean(out[epoch_col])
-    out = out.drop(columns=[epoch_col])
+
+    if epoch_col != value_name:
+        out = out.drop(columns=[epoch_col])
 
     if date_col is not None:
         out = out.rename(columns={date_col: "epoch_date"})
@@ -239,9 +289,11 @@ def load_epoch_scores(
 
     print(f"[INFO] Loaded {value_name}")
     print(f"       file: {path}")
+    print(f"       ID column: {id_col} -> {ID_COL}")
     print(f"       score column: {epoch_col}")
     print(f"       date column: {date_col if date_col is not None else 'none'}")
     print(f"       rows: {len(out):,}")
+    print(f"       unique PTID: {out[ID_COL].nunique():,}")
 
     return out
 
@@ -259,6 +311,7 @@ def add_anchor_date(epoch_df: pd.DataFrame, adni: pd.DataFrame) -> pd.DataFrame:
     out = epoch_df.merge(first_dates, on=ID_COL, how="left")
     out["anchor_date"] = out["epoch_date"].where(out["epoch_date"].notna(), out["first_adni_date"])
     out = out.drop(columns=["first_adni_date"])
+
     return out
 
 
@@ -284,7 +337,11 @@ def compute_slope_per_year(
         t = (g["epoch_date"] - g["epoch_date"].min()).dt.days.values.astype(float) / 365.25
         y = g[value_col].values.astype(float)
 
-        if np.nanmax(t) - np.nanmin(t) < min_followup_years:
+        followup = np.nanmax(t) - np.nanmin(t)
+        if not np.isfinite(followup) or followup < min_followup_years:
+            continue
+
+        if np.nanstd(y, ddof=1) <= 0:
             continue
 
         X = np.column_stack([np.ones(len(t)), t])
@@ -295,16 +352,18 @@ def compute_slope_per_year(
             out_col: float(coef[1]),
             "AD_EPOCH_slope_intercept": float(coef[0]),
             "n_epoch_scans_for_slope": int(len(g)),
-            "epoch_slope_followup_years": float(np.nanmax(t) - np.nanmin(t)),
+            "epoch_slope_followup_years": float(followup),
             "anchor_date": g["epoch_date"].max(),
             "baseline_epoch_date": g["epoch_date"].min(),
         })
 
-    return pd.DataFrame(rows)
+    out = pd.DataFrame(rows)
+    print(f"[INFO] Computed AD EPOCH slope per year for {len(out):,} participants")
+    return out
 
 
 # ============================================================
-# Nearest ADNI measurements within window
+# Extract nearest ADNI variables within date window
 # ============================================================
 
 def nearest_visit_values(
@@ -362,7 +421,8 @@ def nearest_visit_values(
 
         rows.append(row)
 
-    return pd.DataFrame(rows)
+    out = pd.DataFrame(rows)
+    return out
 
 
 # ============================================================
@@ -430,12 +490,14 @@ def ols_standardized_beta(
 
         rank = np.linalg.matrix_rank(X)
         dfree = len(y) - rank
+
         if dfree <= 0:
             return {"status": "no_residual_df", "n": len(df)}
 
         sigma2 = float(np.sum(resid ** 2) / dfree)
         xtx_inv = np.linalg.pinv(X.T @ X)
         se = float(np.sqrt(sigma2 * xtx_inv[1, 1]))
+
         beta = float(coef[1])
         tval = beta / se if se > 0 else np.nan
         pval = float(2.0 * stats.t.sf(abs(tval), dfree)) if np.isfinite(tval) else np.nan
@@ -457,7 +519,10 @@ def ols_standardized_beta(
         }
 
     except Exception as e:
-        return {"status": f"ols_failed: {e}", "n": len(df)}
+        return {
+            "status": f"ols_failed: {e}",
+            "n": len(df),
+        }
 
 
 def residualize(df: pd.DataFrame, var_col: str, covariates: List[str]) -> Optional[np.ndarray]:
@@ -518,13 +583,16 @@ def paired_permutation_abs_beta(
 
     for b in range(n_perm):
         swap = rng.random(len(df)) < 0.5
+
         xe_p = xe.copy()
         xm_p = xm.copy()
+
         xe_p[swap] = xm[swap]
         xm_p[swap] = xe[swap]
 
         be = beta_1d(xe_p, y)
         bm = beta_1d(xm_p, y)
+
         perm_stats[b] = abs(be) - abs(bm)
 
     p_perm = (np.sum(np.abs(perm_stats) >= abs(obs)) + 1.0) / (n_perm + 1.0)
@@ -545,7 +613,10 @@ def paired_permutation_abs_beta(
 
 def parse_args():
     p = argparse.ArgumentParser(
-        description="ADNI AD EPOCH versus comparator biomarkers for cognitive associations."
+        description=(
+            "Compare ADNI AD EPOCH baseline/slope associations with cognition "
+            "against SPARE and CSF biomarkers."
+        )
     )
 
     p.add_argument("--adni_tsv", required=True, type=str)
@@ -576,6 +647,9 @@ def main():
 
     variables_to_extract = COGNITIVE_COLS + COMPARATOR_BIOMARKER_COLS + COVARIATE_COLS
 
+    # ------------------------------------------------------------
+    # Baseline AD EPOCH
+    # ------------------------------------------------------------
     print("[INFO] Loading baseline AD EPOCH")
     baseline_epoch = load_epoch_scores(
         args.baseline_epoch,
@@ -583,6 +657,7 @@ def main():
         requested_col=args.baseline_epoch_col,
         prefer_longitudinal=False,
     )
+
     baseline_epoch = add_anchor_date(baseline_epoch, adni)
     baseline_anchors = baseline_epoch[[ID_COL, "anchor_date", "AD_EPOCH_baseline"]].copy()
 
@@ -599,8 +674,12 @@ def main():
         on=ID_COL,
         how="left",
     )
+
     baseline_data["analysis_type"] = "baseline_AD_EPOCH"
 
+    # ------------------------------------------------------------
+    # Longitudinal AD EPOCH slope
+    # ------------------------------------------------------------
     print("[INFO] Loading longitudinal AD EPOCH")
     long_epoch = load_epoch_scores(
         args.longitudinal_epoch,
@@ -618,8 +697,8 @@ def main():
         min_followup_years=args.min_slope_followup_years,
     )
 
-    print(f"[INFO] Baseline AD EPOCH analysis N={len(baseline_data):,}")
-    print(f"[INFO] AD EPOCH slope analysis N={len(slope_epoch):,}")
+    print(f"[INFO] Baseline AD EPOCH anchor rows: {len(baseline_data):,}")
+    print(f"[INFO] AD EPOCH slope rows: {len(slope_epoch):,}")
 
     if len(slope_epoch) > 0:
         print("[INFO] Extracting nearest ADNI measures for slope analysis")
@@ -635,33 +714,35 @@ def main():
             on=ID_COL,
             how="left",
         )
+
         slope_data["analysis_type"] = "AD_EPOCH_slope_per_year"
     else:
         slope_data = pd.DataFrame()
 
-    # Save analysis datasets
-    baseline_data.to_csv(
-        os.path.join(args.outdir, "analysis_dataset_baseline_ad_epoch.tsv"),
-        sep="\t",
-        index=False,
-    )
+    # ------------------------------------------------------------
+    # Save analysis-ready datasets
+    # ------------------------------------------------------------
+    baseline_dataset_path = os.path.join(args.outdir, "analysis_dataset_baseline_ad_epoch.tsv")
+    baseline_data.to_csv(baseline_dataset_path, sep="\t", index=False)
 
     if len(slope_data) > 0:
-        slope_data.to_csv(
-            os.path.join(args.outdir, "analysis_dataset_ad_epoch_slope.tsv"),
-            sep="\t",
-            index=False,
-        )
+        slope_dataset_path = os.path.join(args.outdir, "analysis_dataset_ad_epoch_slope.tsv")
+        slope_data.to_csv(slope_dataset_path, sep="\t", index=False)
 
+    # ------------------------------------------------------------
     # Association and permutation analyses
+    # ------------------------------------------------------------
     association_rows = []
     permutation_rows = []
 
     analysis_sets = [
         ("baseline_AD_EPOCH", baseline_data, "AD_EPOCH_baseline"),
     ]
+
     if len(slope_data) > 0:
-        analysis_sets.append(("AD_EPOCH_slope_per_year", slope_data, "AD_EPOCH_slope_per_year"))
+        analysis_sets.append(
+            ("AD_EPOCH_slope_per_year", slope_data, "AD_EPOCH_slope_per_year")
+        )
 
     for analysis_type, data, epoch_predictor in analysis_sets:
         predictors = [epoch_predictor] + COMPARATOR_BIOMARKER_COLS
@@ -680,7 +761,9 @@ def main():
                     "analysis_type": analysis_type,
                     "cognitive_score": cognitive_score,
                     "predictor": predictor,
-                    "predictor_class": "AD_EPOCH" if predictor == epoch_predictor else "Comparator_biomarker",
+                    "predictor_class": (
+                        "AD_EPOCH" if predictor == epoch_predictor else "Comparator_biomarker"
+                    ),
                     "n": res.get("n", np.nan),
                     "standardized_beta": res.get("standardized_beta", np.nan),
                     "se": res.get("se", np.nan),
@@ -732,34 +815,46 @@ def main():
     assoc.to_csv(assoc_path, sep="\t", index=False)
     perm.to_csv(perm_path, sep="\t", index=False)
 
+    # ------------------------------------------------------------
+    # Column manifest
+    # ------------------------------------------------------------
     manifest = pd.DataFrame({
         "column_type": (
-            ["id"] +
-            ["date"] +
-            ["cognitive_score"] * len(COGNITIVE_COLS) +
-            ["comparator_biomarker"] * len(COMPARATOR_BIOMARKER_COLS) +
-            ["covariate"] * len(COVARIATE_COLS)
+            ["id"]
+            + ["date"]
+            + ["cognitive_score"] * len(COGNITIVE_COLS)
+            + ["comparator_biomarker"] * len(COMPARATOR_BIOMARKER_COLS)
+            + ["covariate"] * len(COVARIATE_COLS)
         ),
         "column_name": (
-            [ID_COL] +
-            [DATE_COL] +
-            COGNITIVE_COLS +
-            COMPARATOR_BIOMARKER_COLS +
-            COVARIATE_COLS
+            [ID_COL]
+            + [DATE_COL]
+            + COGNITIVE_COLS
+            + COMPARATOR_BIOMARKER_COLS
+            + COVARIATE_COLS
         ),
     })
 
-    manifest.to_csv(
-        os.path.join(args.outdir, "exact_column_manifest.tsv"),
-        sep="\t",
-        index=False,
-    )
+    manifest_path = os.path.join(args.outdir, "exact_column_manifest.tsv")
+    manifest.to_csv(manifest_path, sep="\t", index=False)
+
+    print("[DONE] Analysis-ready baseline dataset:")
+    print(baseline_dataset_path)
+
+    if len(slope_data) > 0:
+        print("[DONE] Analysis-ready slope dataset:")
+        print(slope_dataset_path)
 
     print("[DONE] Standardized beta table:")
     print(assoc_path)
+
     print("[DONE] Paired permutation comparison table:")
     print(perm_path)
-    print("[DONE] Analysis output directory:")
+
+    print("[DONE] Column manifest:")
+    print(manifest_path)
+
+    print("[DONE] Output directory:")
     print(args.outdir)
 
 
