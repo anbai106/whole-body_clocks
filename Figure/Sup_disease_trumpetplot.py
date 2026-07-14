@@ -26,7 +26,6 @@ FASTGWA_BASENAME = "organ_pheno_normalized_residualized.fastGWA"
 FUMA_BASENAME = "IndSigSNPs.txt"
 
 DISEASE_ORDER = ["asthma", "copd", "dementia", "mi", "stroke"]
-MODALITY_ORDER = ["mri", "proteomics", "metabolomics"]
 
 DISEASE_LABEL = {
     "asthma": "Asthma",
@@ -40,6 +39,13 @@ MODALITY_LABEL = {
     "mri": "MRI",
     "proteomics": "Proteomics",
     "metabolomics": "Metabolomics",
+}
+
+MODALITY_ORDER = {
+    "MRI": 1,
+    "Proteomics": 2,
+    "Metabolomics": 3,
+    "Unknown": 99,
 }
 
 
@@ -63,7 +69,7 @@ def find_first_existing_col(df: pd.DataFrame, candidates: List[str]) -> Optional
 
 
 def clean_token(x: str) -> str:
-    x = str(x)
+    x = str(x).strip()
     x = x.replace("-", "_").replace(" ", "_")
     x = re.sub(r"_+", "_", x)
     return x.strip("_")
@@ -76,6 +82,8 @@ def canonical_organ_key(organ_raw: str) -> str:
         return "hepatic"
     if x in ["kidney", "renal"]:
         return "renal"
+    if x in ["lung", "pulmonary"]:
+        return "pulmonary"
     if x in ["reproductive_female", "female_reproductive"]:
         return "reproductive_female"
     if x in ["reproductive_male", "male_reproductive"]:
@@ -121,11 +129,15 @@ def format_organ_label(organ_raw: str) -> str:
 
 def parse_disease_epoch_clock_folder(clock_folder: str) -> Dict[str, object]:
     """
-    Parse folders such as:
+    Parse disease EPOCH folders.
+
+    Examples:
       Brain_proteomics_dementia_clock
+      Brain_proteomics_mi_clock
       heart_mri_copd_clock
       spleen_mri_asthma_clock
       Reproductive_female_proteomics_mi_clock
+      Reproductive_male_proteomics_stroke_clock
     """
 
     pattern = re.compile(
@@ -142,17 +154,16 @@ def parse_disease_epoch_clock_folder(clock_folder: str) -> Dict[str, object]:
             "organ_raw": "",
             "organ_key": "",
             "organ_label": "",
-            "modality": "",
-            "modality_label": "",
+            "modality": "Unknown",
+            "modality_key": "unknown",
             "disease": "",
             "disease_label": "",
-            "parse_error": "folder_name_does_not_match_expected_disease_epoch_pattern",
+            "parse_error": "folder_name_does_not_match_expected_pattern",
         }
 
     organ_raw = m.group("organ")
-    modality = m.group("modality").lower()
+    modality_key = m.group("modality").lower()
     disease = m.group("disease").lower()
-
     organ_key = canonical_organ_key(organ_raw)
 
     return {
@@ -161,8 +172,8 @@ def parse_disease_epoch_clock_folder(clock_folder: str) -> Dict[str, object]:
         "organ_raw": organ_raw,
         "organ_key": organ_key,
         "organ_label": format_organ_label(organ_raw),
-        "modality": MODALITY_LABEL.get(modality, modality),
-        "modality_key": modality,
+        "modality": MODALITY_LABEL.get(modality_key, modality_key),
+        "modality_key": modality_key,
         "disease": disease,
         "disease_label": DISEASE_LABEL.get(disease, disease.capitalize()),
         "parse_error": "",
@@ -182,29 +193,31 @@ def read_header(path: str) -> List[str]:
     return list(pd.read_csv(path, sep="\t", nrows=0).columns)
 
 
+def find_col_from_header(columns: List[str], candidates: List[str]) -> Optional[str]:
+    exact = {c: c for c in columns}
+    lower = {c.lower(): c for c in columns}
+
+    for c in candidates:
+        if c in exact:
+            return exact[c]
+
+    for c in candidates:
+        if c.lower() in lower:
+            return lower[c.lower()]
+
+    return None
+
+
 def ensure_required_cols_from_header(
     columns: List[str],
     required: Dict[str, List[str]],
     path: str,
 ) -> Dict[str, str]:
 
-    exact = {c: c for c in columns}
-    lower = {c.lower(): c for c in columns}
     col_map = {}
 
     for standard_name, candidates in required.items():
-        found = None
-
-        for c in candidates:
-            if c in exact:
-                found = exact[c]
-                break
-
-        if found is None:
-            for c in candidates:
-                if c.lower() in lower:
-                    found = lower[c.lower()]
-                    break
+        found = find_col_from_header(columns, candidates)
 
         if found is None:
             raise ValueError(
@@ -218,39 +231,116 @@ def ensure_required_cols_from_header(
     return col_map
 
 
+def unique_preserve_order(x: List[str]) -> List[str]:
+    seen = set()
+    out = []
+
+    for item in x:
+        if item not in seen:
+            out.append(item)
+            seen.add(item)
+
+    return out
+
+
 # ============================================================
-# 3. Input discovery
+# 3. Robust disease EPOCH fastGWA discovery
 # ============================================================
+
+def discover_fastgwa_files_robust(base_dir: str) -> Tuple[List[str], Dict[str, int]]:
+    """
+    Robustly discover disease EPOCH fastGWA files.
+
+    This intentionally uses multiple patterns because the 47 disease EPOCH
+    folders are directly under WholeBodyClock, not under mortality_clock.
+    """
+
+    patterns = [
+        os.path.join(base_dir, "*", "fastGWA", "output", FASTGWA_BASENAME),
+        os.path.join(base_dir, "*_clock", "fastGWA", "output", FASTGWA_BASENAME),
+        os.path.join(base_dir, "*", "fastGWA", "output", "*.fastGWA"),
+        os.path.join(base_dir, "**", "fastGWA", "output", FASTGWA_BASENAME),
+        os.path.join(base_dir, "**", "fastGWA", "output", "*.fastGWA"),
+    ]
+
+    counts = {}
+    files = []
+
+    for pat in patterns:
+        hits = sorted(glob(pat, recursive=True))
+        counts[pat] = len(hits)
+        files.extend(hits)
+
+    # os.walk fallback
+    walk_hits = []
+    for root, _, filenames in os.walk(base_dir):
+        if os.path.basename(root) != "output":
+            continue
+
+        if os.path.basename(os.path.dirname(root)) != "fastGWA":
+            continue
+
+        for fn in filenames:
+            if fn == FASTGWA_BASENAME or fn.endswith(".fastGWA"):
+                walk_hits.append(os.path.join(root, fn))
+
+    counts["os.walk fastGWA/output/*.fastGWA"] = len(walk_hits)
+    files.extend(walk_hits)
+
+    files = sorted(set(os.path.abspath(x) for x in files))
+
+    # Prefer the canonical filename if present, but allow any .fastGWA.
+    canonical = [x for x in files if os.path.basename(x) == FASTGWA_BASENAME]
+    if len(canonical) > 0:
+        files = canonical
+
+    return files, counts
+
+
+def clock_folder_from_fastgwa_file(base_dir: str, fastgwa_file: str) -> Optional[str]:
+    """
+    Infer <clock_folder> from:
+      <base_dir>/<clock_folder>/fastGWA/output/<file>
+    """
+
+    rel = os.path.relpath(fastgwa_file, base_dir)
+    parts = rel.split(os.sep)
+
+    if "fastGWA" not in parts:
+        return None
+
+    idx = parts.index("fastGWA")
+
+    if idx == 0:
+        return None
+
+    return parts[idx - 1]
+
 
 def discover_disease_epoch_fastgwa_files(
     base_dir: str,
     allowed_diseases: List[str],
-) -> pd.DataFrame:
+) -> Tuple[pd.DataFrame, Dict[str, int]]:
 
-    fastgwa_pattern = os.path.join(
-        base_dir,
-        "*_clock",
-        "fastGWA",
-        "output",
-        FASTGWA_BASENAME,
-    )
-
-    fastgwa_files = sorted(glob(fastgwa_pattern))
+    fastgwa_files, discovery_counts = discover_fastgwa_files_robust(base_dir)
 
     rows = []
 
     for fastgwa_file in fastgwa_files:
-        rel_parts = os.path.relpath(fastgwa_file, base_dir).split(os.sep)
+        clock_folder = clock_folder_from_fastgwa_file(base_dir, fastgwa_file)
 
-        if len(rel_parts) < 5:
-            continue
-
-        clock_folder = rel_parts[0]
-        parsed = parse_disease_epoch_clock_folder(clock_folder)
-
-        if not parsed["parse_ok"]:
+        if clock_folder is None:
             rows.append({
-                **parsed,
+                "parse_ok": False,
+                "clock_folder": "",
+                "organ_raw": "",
+                "organ_key": "",
+                "organ_label": "",
+                "modality": "Unknown",
+                "modality_key": "unknown",
+                "disease": "",
+                "disease_label": "",
+                "parse_error": "could_not_infer_clock_folder_from_path",
                 "fastgwa_file": fastgwa_file,
                 "iss_file": "",
                 "fastgwa_exists": os.path.exists(fastgwa_file),
@@ -258,7 +348,9 @@ def discover_disease_epoch_fastgwa_files(
             })
             continue
 
-        if parsed["disease"] not in allowed_diseases:
+        parsed = parse_disease_epoch_clock_folder(clock_folder)
+
+        if parsed["parse_ok"] and parsed["disease"] not in allowed_diseases:
             continue
 
         iss_file = os.path.join(
@@ -279,20 +371,30 @@ def discover_disease_epoch_fastgwa_files(
     df = pd.DataFrame(rows)
 
     if df.empty:
-        return df
+        return df, discovery_counts
 
     disease_rank = {d: i for i, d in enumerate(DISEASE_ORDER)}
-    modality_rank = {m: i for i, m in enumerate(["MRI", "Proteomics", "Metabolomics"])}
+    modality_rank = {
+        "MRI": 0,
+        "Proteomics": 1,
+        "Metabolomics": 2,
+        "Unknown": 99,
+    }
 
     df["disease_order"] = df["disease"].map(disease_rank).fillna(999).astype(int)
     df["modality_order"] = df["modality"].map(modality_rank).fillna(999).astype(int)
 
-    df = df.sort_values(
-        ["disease_order", "modality_order", "organ_label", "clock_folder"],
-        kind="mergesort",
-    ).reset_index(drop=True)
+    df = (
+        df
+        .drop_duplicates(subset=["clock_folder", "fastgwa_file"])
+        .sort_values(
+            ["disease_order", "modality_order", "organ_label", "clock_folder"],
+            kind="mergesort",
+        )
+        .reset_index(drop=True)
+    )
 
-    return df
+    return df, discovery_counts
 
 
 # ============================================================
@@ -357,26 +459,13 @@ def read_fastgwa_beta_afreq_n(fastgwa_file: str) -> pd.DataFrame:
         (["SE", "se", "BETA_SE"], "SE"),
         (["P", "p", "PVAL", "pval"], "P"),
     ]:
-        col = None
-        lower = {c.lower(): c for c in columns}
-        exact = {c: c for c in columns}
-
-        for c in candidates:
-            if c in exact:
-                col = exact[c]
-                break
-
-        if col is None:
-            for c in candidates:
-                if c.lower() in lower:
-                    col = lower[c.lower()]
-                    break
+        col = find_col_from_header(columns, candidates)
 
         if col is not None:
             keep_cols.append(col)
             optional_cols[col] = standard_name
 
-    keep_cols = list(dict.fromkeys(keep_cols))
+    keep_cols = unique_preserve_order(keep_cols)
 
     df_gwas = safe_read_tsv(fastgwa_file, usecols=keep_cols)
 
@@ -399,9 +488,34 @@ def read_fastgwa_beta_afreq_n(fastgwa_file: str) -> pd.DataFrame:
     out = out.dropna(subset=["rsID", "freq", "A1_beta", "N"]).copy()
     out = out.loc[(out["freq"] > 0) & (out["freq"] < 1)].copy()
     out = out.loc[out["rsID"].str.lower() != "nan"].copy()
+    out = out.loc[out["rsID"] != ""].copy()
     out = out.drop_duplicates(subset=["rsID"])
 
     return out
+
+
+def prepare_empty_output(clock_row: pd.Series) -> pd.DataFrame:
+    columns = [
+        "rsID",
+        "freq",
+        "A1_beta",
+        "N",
+        "Gene",
+        "Analysis",
+        "A1",
+        "A2",
+        "SE",
+        "P",
+        "clock_folder",
+        "organ_raw",
+        "organ_key",
+        "organ_label",
+        "modality",
+        "disease",
+        "disease_label",
+    ]
+
+    return pd.DataFrame(columns=columns)
 
 
 def prepare_trumpet_input_for_clock(
@@ -415,27 +529,7 @@ def prepare_trumpet_input_for_clock(
     n_iss = df_iss.shape[0]
 
     if df_iss.empty:
-        df_final = pd.DataFrame(
-            columns=[
-                "rsID",
-                "freq",
-                "A1_beta",
-                "N",
-                "Gene",
-                "Analysis",
-                "A1",
-                "A2",
-                "SE",
-                "P",
-                "clock_folder",
-                "organ_raw",
-                "organ_key",
-                "organ_label",
-                "modality",
-                "disease",
-                "disease_label",
-            ]
-        )
+        df_final = prepare_empty_output(clock_row)
     else:
         df_gwas = read_fastgwa_beta_afreq_n(clock_row["fastgwa_file"])
 
@@ -506,10 +600,25 @@ def run(
     print(f"Diseases:              {','.join(diseases)}")
     print(f"Expected clocks:       {expected_n_clocks}")
 
-    df_clock = discover_disease_epoch_fastgwa_files(
+    if not os.path.isdir(base_dir):
+        raise FileNotFoundError(f"Cannot find base directory: {base_dir}")
+
+    df_clock, discovery_counts = discover_disease_epoch_fastgwa_files(
         base_dir=base_dir,
         allowed_diseases=diseases,
     )
+
+    discovery_debug_out = os.path.join(
+        outdir,
+        "TrumpetPlots_47_disease_epoch_fastgwa_discovery_debug.tsv",
+    )
+
+    pd.DataFrame(
+        [
+            {"pattern_or_method": k, "n_files": v}
+            for k, v in discovery_counts.items()
+        ]
+    ).to_csv(discovery_debug_out, index=False, sep="\t", encoding="utf-8")
 
     manifest_out = os.path.join(
         outdir,
@@ -519,15 +628,25 @@ def run(
     df_clock.to_csv(manifest_out, index=False, sep="\t", encoding="utf-8")
 
     if df_clock.empty:
+        print("Discovery debug:")
+        for k, v in discovery_counts.items():
+            print(f"  {k}: {v}")
+
         raise RuntimeError(
-            f"No disease EPOCH fastGWA files found under: {base_dir}"
+            "No disease EPOCH fastGWA files were discovered. "
+            f"Base directory checked: {base_dir}. "
+            f"Discovery debug written to: {discovery_debug_out}"
         )
 
     n_parse_ok = int(df_clock["parse_ok"].sum())
     n_found = int(df_clock.shape[0])
 
-    print(f"Discovered clock folders: {n_found}")
+    print(f"Discovered fastGWA files: {n_found}")
     print(f"Parse-ok clock folders:   {n_parse_ok}")
+
+    print("Discovery debug:")
+    for k, v in discovery_counts.items():
+        print(f"  {k}: {v}")
 
     if n_parse_ok != expected_n_clocks:
         print(
@@ -719,6 +838,8 @@ def run(
             n_clocks=("clock_folder", "nunique"),
             n_ok=("status", lambda x: int((x == "ok").sum())),
             n_empty=("status", lambda x: int((x == "ok_empty_after_merge").sum())),
+            n_missing_fastgwa=("status", lambda x: int((x == "missing_fastgwa").sum())),
+            n_missing_IndSigSNPs=("status", lambda x: int((x == "missing_IndSigSNPs").sum())),
             n_error=("status", lambda x: int((x == "error").sum())),
             total_independent_significant_snps=("n_independent_significant_snps", "sum"),
             total_rows_after_merge=("n_rows_after_merge", "sum"),
@@ -728,6 +849,8 @@ def run(
             n_clocks=("clock_folder", "nunique"),
             n_ok=("status", lambda x: int((x == "ok").sum())),
             n_empty=("status", lambda x: int((x == "ok_empty_after_merge").sum())),
+            n_missing_fastgwa=("status", lambda x: int((x == "missing_fastgwa").sum())),
+            n_missing_IndSigSNPs=("status", lambda x: int((x == "missing_IndSigSNPs").sum())),
             n_error=("status", lambda x: int((x == "error").sum())),
             total_independent_significant_snps=("n_independent_significant_snps", "sum"),
             total_rows_after_merge=("n_rows_after_merge", "sum"),
@@ -735,6 +858,7 @@ def run(
 
     print("============================================================")
     print("Finished.")
+    print(f"Discovery debug:    {discovery_debug_out}")
     print(f"Manifest:           {manifest_out}")
     print(f"Parse failures:     {parse_failed_out}")
     print(f"Missing inputs:     {missing_out}")
@@ -763,8 +887,9 @@ def parse_args():
         default=DEFAULT_BASE_DIR,
         type=str,
         help=(
-            "WholeBodyClock base directory containing <clock_folder>/fastGWA/output/"
-            "organ_pheno_normalized_residualized.fastGWA and <clock_folder>/fuma/IndSigSNPs.txt."
+            "WholeBodyClock base directory containing "
+            "<clock_folder>/fastGWA/output/organ_pheno_normalized_residualized.fastGWA "
+            "and <clock_folder>/fuma/IndSigSNPs.txt."
         ),
     )
 
@@ -779,7 +904,7 @@ def parse_args():
         "--diseases",
         default="asthma,copd,dementia,mi,stroke",
         type=str,
-        help="Comma-separated diseases to include.",
+        help="Comma-separated disease keys to include.",
     )
 
     parser.add_argument(

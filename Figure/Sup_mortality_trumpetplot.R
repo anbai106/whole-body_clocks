@@ -13,6 +13,7 @@ suppressPackageStartupMessages({
   library(ggplot2)
   library(gridExtra)
   library(grid)
+  library(patchwork)
 })
 
 # ============================================================
@@ -406,7 +407,8 @@ summary_out <- file.path(
 fwrite(summary_df, summary_out, sep = "\t")
 
 # ============================================================
-# 7. Combined figure: all 22 clocks
+# 7. Compact combined figure: all 22 mortality EPOCH clocks
+#    Create p_combine as a single patchwork object for RStudio
 # ============================================================
 
 if (length(plot_list) == 0) {
@@ -415,50 +417,86 @@ if (length(plot_list) == 0) {
 
 combined_pdf <- file.path(
   OUTDIR,
-  "TrumpetPlots_22_mortality_epoch_all_clocks.pdf"
+  "TrumpetPlots_22_mortality_epoch_all_clocks_compact.pdf"
 )
 
 combined_png <- file.path(
   OUTDIR,
-  "TrumpetPlots_22_mortality_epoch_all_clocks.png"
+  "TrumpetPlots_22_mortality_epoch_all_clocks_compact.png"
 )
 
-pdf(
-  combined_pdf,
-  width = 16.5,
-  height = 18.0,
-  onefile = TRUE
+combined_rds <- file.path(
+  OUTDIR,
+  "TrumpetPlots_22_mortality_epoch_all_clocks_compact_p_combine.rds"
 )
 
-grid.arrange(
-  grobs = plot_list,
+# Keep the plots in the manifest order.
+plot_list_ordered <- plot_list[summary_df$status == "ok"]
+
+# Make each subplot more compact.
+plot_list_compact <- lapply(plot_list_ordered, function(p) {
+  p +
+    theme(
+      plot.title = element_text(
+        hjust = 0.5,
+        face = "bold",
+        size = 6.8,
+        lineheight = 0.88,
+        margin = margin(b = 1)
+      ),
+      axis.title = element_text(face = "bold", size = 6.3),
+      axis.text = element_text(size = 5.5),
+      axis.ticks = element_line(linewidth = 0.18),
+      panel.grid.major = element_line(linewidth = 0.12, color = "grey90"),
+      panel.grid.minor = element_blank(),
+      plot.margin = margin(1.5, 1.5, 1.5, 1.5),
+      legend.position = "none"
+    )
+})
+
+# This is the object you can open/view directly in RStudio.
+p_combine <- patchwork::wrap_plots(
+  plot_list_compact,
   ncol = 4,
-  top = grid::textGrob(
-    "Trumpet plots for 22 mortality EPOCH clocks",
-    gp = grid::gpar(fontsize = 18, fontface = "bold")
+  byrow = TRUE
+) +
+  patchwork::plot_annotation(
+    title = "Trumpet plots for 22 mortality EPOCH clocks",
+    theme = theme(
+      plot.title = element_text(
+        hjust = 0.5,
+        face = "bold",
+        size = 15,
+        margin = margin(b = 6)
+      )
+    )
   )
+
+# Print/view in RStudio.
+p_combine
+
+# Save compact combined figure.
+ggsave(
+  filename = combined_pdf,
+  plot = p_combine,
+  width = 12.8,
+  height = 14.2,
+  device = "pdf"
 )
 
-dev.off()
-
-png(
-  combined_png,
-  width = 16.5,
-  height = 18.0,
-  units = "in",
-  res = 300
+ggsave(
+  filename = combined_png,
+  plot = p_combine,
+  width = 12.8,
+  height = 14.2,
+  dpi = 300
 )
 
-grid.arrange(
-  grobs = plot_list,
-  ncol = 4,
-  top = grid::textGrob(
-    "Trumpet plots for 22 mortality EPOCH clocks",
-    gp = grid::gpar(fontsize = 18, fontface = "bold")
-  )
+# Save the R object so you can reload it later.
+saveRDS(
+  p_combine,
+  file = combined_rds
 )
-
-dev.off()
 
 # ============================================================
 # 8. Modality-specific combined figures
