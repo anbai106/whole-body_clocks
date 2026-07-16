@@ -489,8 +489,7 @@ make_clock_scatter <- function(meta_row) {
 
   stat_text <- paste0(
     "R = ", round(pearson_r, 2),
-    "; P = ", format_p(pearson_p),
-    "; R\u00b2 = ", round(lm_r2, 3)
+    "; P = ", format_p(pearson_p)
   )
 
   x_min <- min(df$aging_clock_value, na.rm = TRUE)
@@ -703,7 +702,7 @@ shrink_text_layers <- function(p, text_size = 2.15) {
 combined_panel_title_size <- 9.5
 combined_axis_title_size <- 7.0
 combined_axis_text_size <- 9
-combined_stat_text_size <- 4
+combined_stat_text_size <- 3
 
 plot_list_named <- purrr::map2(
   plot_list_ordered,
