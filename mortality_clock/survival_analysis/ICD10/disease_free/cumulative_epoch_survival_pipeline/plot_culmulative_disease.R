@@ -6,7 +6,7 @@
 #
 # Example input:
 #   /Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/mortality_clock/SA/
-#   output_cumulative_EPOCH_PM/disease_free/cox_cumulative_EPOCH_PM_I10.tsv
+#   output_cumulative_EPOCH_PM/disease_free_cv/cox_cumulative_EPOCH_PM_N189.tsv
 #
 # This script plots how Harrell's C-index changes as the 11 proteomics and
 # 4 metabolomics mortality EPOCH clocks are added cumulatively to the
@@ -20,24 +20,23 @@ options(stringsAsFactors = FALSE)
 # -----------------------------------------------------------------------------
 
 # ICD code to plot. Change this to another endpoint, etc.
-DISEASE_CODE <- Sys.getenv("DISEASE_CODE", unset = "I10")
+DISEASE_CODE <- Sys.getenv("DISEASE_CODE", unset = "N183")
 
 # Disease display name for figure title.
 DISEASE_NAME <- Sys.getenv(
   "DISEASE_NAME",
-  unset = "Hypertention"
+  "CKD"
 )
 
 # Directory containing one cumulative result file per disease:
 # cox_cumulative_EPOCH_PM_<ICD>.tsv
 INPUT_DIR <- Sys.getenv(
   "INPUT_DIR",
-  unset = "/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/mortality_clock/SA/output_cumulative_EPOCH_PM/disease_free"
+  unset = "/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/mortality_clock/SA/output_cumulative_EPOCH_PM/disease_free_cv"
 )
 
 # By default, the script builds the disease-specific input filename.
 # You can also override this with:
-#   INPUT_FILE=/path/to/cox_cumulative_EPOCH_PM_I10.tsv Rscript this_script.R
 INPUT_FILE <- Sys.getenv(
   "INPUT_FILE",
   unset = file.path(
