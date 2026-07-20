@@ -4,13 +4,17 @@
 # Plot cumulative C-index for one disease endpoint
 # Proteomics + Metabolomics mortality EPOCH cumulative survival analysis
 #
-# Example input:
-#   /Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/mortality_clock/SA/
-#   output_cumulative_EPOCH_PM/disease_free_cv/cox_cumulative_EPOCH_PM_N189.tsv
-#
 # This script plots how Harrell's C-index changes as the 11 proteomics and
 # 4 metabolomics mortality EPOCH clocks are added cumulatively to the
 # clinical baseline model.
+#
+# C-index options:
+#   C_INDEX_TYPE=cv        : 5-fold cross-validated C-index, default
+#   C_INDEX_TYPE=apparent  : apparent/in-sample Harrell C-index
+#
+# Example:
+#   DISEASE_CODE=N183 DISEASE_NAME="CKD" C_INDEX_TYPE=cv Rscript plot_culmulative_disease_epoch.R
+#   DISEASE_CODE=N183 DISEASE_NAME="CKD" C_INDEX_TYPE=apparent Rscript plot_culmulative_disease_epoch.R
 # =============================================================================
 
 options(stringsAsFactors = FALSE)
@@ -19,24 +23,18 @@ options(stringsAsFactors = FALSE)
 # User-editable settings
 # -----------------------------------------------------------------------------
 
-# ICD code to plot. Change this to another endpoint, etc.
-DISEASE_CODE <- Sys.getenv("DISEASE_CODE", unset = "N183")
+DISEASE_CODE <- Sys.getenv("DISEASE_CODE", unset = "I500")
 
-# Disease display name for figure title.
 DISEASE_NAME <- Sys.getenv(
   "DISEASE_NAME",
-  "CKD"
+  unset = "CHF"
 )
 
-# Directory containing one cumulative result file per disease:
-# cox_cumulative_EPOCH_PM_<ICD>.tsv
 INPUT_DIR <- Sys.getenv(
   "INPUT_DIR",
   unset = "/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/mortality_clock/SA/output_cumulative_EPOCH_PM/disease_free_cv"
 )
 
-# By default, the script builds the disease-specific input filename.
-# You can also override this with:
 INPUT_FILE <- Sys.getenv(
   "INPUT_FILE",
   unset = file.path(
@@ -50,17 +48,21 @@ OUTPUT_DIR <- Sys.getenv(
   unset = file.path(INPUT_DIR, "figures_cumulative_cindex")
 )
 
+# Options:
+#   "cv"       = plot 5-fold cross-validated Harrell C-index
+#   "apparent" = plot apparent/in-sample Harrell C-index
+C_INDEX_TYPE <- tolower(Sys.getenv("C_INDEX_TYPE", unset = "cv"))
+
 # Sequential likelihood-ratio P-value thresholds for point annotations.
+# These P values are from the apparent Cox models, even when C_INDEX_TYPE="cv".
 P_CUT_1 <- 0.05
 P_CUT_2 <- 0.01
 P_CUT_3 <- 0.001
 
-# Whether to label C-index and incremental C-index changes on the plot.
 SHOW_CINDEX_LABELS <- TRUE
 SHOW_INCREMENT_LABELS <- TRUE
 SHOW_CLOCK_LABELS <- TRUE
 
-# Output dimensions.
 PDF_WIDTH <- 14
 PDF_HEIGHT <- 7.5
 PNG_DPI <- 320
@@ -68,6 +70,7 @@ PNG_DPI <- 320
 # -----------------------------------------------------------------------------
 # Packages
 # -----------------------------------------------------------------------------
+
 required_packages <- c(
   "readr",
   "dplyr",
@@ -107,6 +110,10 @@ dir.create(OUTPUT_DIR, recursive = TRUE, showWarnings = FALSE)
 normalize_icd <- function(x) {
   x <- toupper(trimws(as.character(x)))
   gsub("\\.", "", x)
+}
+
+to_numeric_safe <- function(x) {
+  suppressWarnings(as.numeric(x))
 }
 
 to_logical_safe <- function(x) {
@@ -166,6 +173,26 @@ safe_filename <- function(x) {
 }
 
 # -----------------------------------------------------------------------------
+# Validate C-index type
+# -----------------------------------------------------------------------------
+
+if (!C_INDEX_TYPE %in% c("cv", "apparent")) {
+  stop(
+    "C_INDEX_TYPE must be one of: cv, apparent. Current value: ",
+    C_INDEX_TYPE,
+    call. = FALSE
+  )
+}
+
+metric_label <- dplyr::case_when(
+  C_INDEX_TYPE == "cv" ~ "5-fold cross-validated Harrell C-index",
+  C_INDEX_TYPE == "apparent" ~ "Apparent Harrell C-index",
+  TRUE ~ "Harrell C-index"
+)
+
+metric_tag <- safe_filename(C_INDEX_TYPE)
+
+# -----------------------------------------------------------------------------
 # Read and validate input
 # -----------------------------------------------------------------------------
 
@@ -215,10 +242,25 @@ required_columns <- c(
   "status"
 )
 
+if (C_INDEX_TYPE == "cv") {
+  required_columns <- c(
+    required_columns,
+    "cv_folds",
+    "cv_seed",
+    "cv_c_index",
+    "cv_base_c_index",
+    "delta_cv_c_index_vs_base",
+    "delta_cv_c_index_vs_previous",
+    "cv_status"
+  )
+}
+
 missing_columns <- setdiff(required_columns, names(dat))
 if (length(missing_columns) > 0L) {
   stop(
-    "Input file is missing required columns: ",
+    "Input file is missing required columns for C_INDEX_TYPE='",
+    C_INDEX_TYPE,
+    "': ",
     paste(missing_columns, collapse = ", "),
     call. = FALSE
   )
@@ -236,7 +278,8 @@ disease_dat_all <- dat %>%
 
 if (nrow(disease_dat_all) == 0L) {
   stop(
-    "Disease code ", disease_code_clean,
+    "Disease code ",
+    disease_code_clean,
     " was not found in the cumulative-results file.",
     call. = FALSE
   )
@@ -245,7 +288,8 @@ if (nrow(disease_dat_all) == 0L) {
 if (anyDuplicated(disease_dat_all$cumulative_step)) {
   stop(
     "More than one row exists for at least one cumulative step for ",
-    disease_code_clean, ".",
+    disease_code_clean,
+    ".",
     call. = FALSE
   )
 }
@@ -254,21 +298,70 @@ if (anyDuplicated(disease_dat_all$cumulative_step)) {
 # Clean and prepare plotting data
 # -----------------------------------------------------------------------------
 
-failed_models <- disease_dat_all %>%
-  filter(
-    tolower(as.character(status)) != "ok" |
-      is.na(c_index) |
-      !is.finite(as.numeric(c_index))
-  )
+if (C_INDEX_TYPE == "apparent") {
+  failed_models <- disease_dat_all %>%
+    filter(
+      tolower(as.character(status)) != "ok" |
+        is.na(c_index) |
+        !is.finite(to_numeric_safe(c_index))
+    )
+
+  plot_dat <- disease_dat_all %>%
+    filter(
+      tolower(as.character(status)) == "ok",
+      is.finite(to_numeric_safe(c_index))
+    ) %>%
+    mutate(
+      c_index_plot = to_numeric_safe(c_index),
+      base_c_index_plot = to_numeric_safe(base_c_index),
+      delta_vs_base_plot = to_numeric_safe(delta_c_index_vs_base),
+      delta_vs_previous_plot = to_numeric_safe(delta_c_index_vs_previous),
+      plot_status = as.character(status)
+    )
+} else {
+  failed_models <- disease_dat_all %>%
+    mutate(
+      cv_status_tmp = as.character(cv_status),
+      cv_c_index_tmp = to_numeric_safe(cv_c_index)
+    ) %>%
+    filter(
+      tolower(cv_status_tmp) != "ok" |
+        is.na(cv_c_index_tmp) |
+        !is.finite(cv_c_index_tmp)
+    )
+
+  plot_dat <- disease_dat_all %>%
+    mutate(
+      cv_status_tmp = as.character(cv_status),
+      cv_c_index_tmp = to_numeric_safe(cv_c_index)
+    ) %>%
+    filter(
+      tolower(cv_status_tmp) == "ok",
+      is.finite(cv_c_index_tmp)
+    ) %>%
+    mutate(
+      c_index_plot = to_numeric_safe(cv_c_index),
+      base_c_index_plot = to_numeric_safe(cv_base_c_index),
+      delta_vs_base_plot = to_numeric_safe(delta_cv_c_index_vs_base),
+      delta_vs_previous_plot = to_numeric_safe(delta_cv_c_index_vs_previous),
+      plot_status = as.character(cv_status)
+    )
+}
 
 if (nrow(failed_models) > 0L) {
   warning(
-    "Omitting ", nrow(failed_models),
-    " failed or unavailable cumulative model(s): ",
+    "Omitting ",
+    nrow(failed_models),
+    " failed or unavailable cumulative model(s) for C_INDEX_TYPE='",
+    C_INDEX_TYPE,
+    "': ",
     paste(
       paste0(
-        "step ", failed_models$cumulative_step,
-        " (", failed_models$added_clock, ")"
+        "step ",
+        failed_models$cumulative_step,
+        " (",
+        failed_models$added_clock,
+        ")"
       ),
       collapse = ", "
     ),
@@ -276,11 +369,7 @@ if (nrow(failed_models) > 0L) {
   )
 }
 
-plot_dat <- disease_dat_all %>%
-  filter(
-    tolower(as.character(status)) == "ok",
-    is.finite(as.numeric(c_index))
-  ) %>%
+plot_dat <- plot_dat %>%
   mutate(
     is_baseline = cumulative_step == 0,
     added_clock = as.character(added_clock),
@@ -290,12 +379,18 @@ plot_dat <- disease_dat_all %>%
     rank_significant_bool = to_logical_safe(rank_significant),
     low_EPV_bool = to_logical_safe(low_EPV_flag),
 
-    c_index_plot = as.numeric(c_index),
-    base_c_index_plot = as.numeric(base_c_index),
-    delta_vs_base_plot = as.numeric(delta_c_index_vs_base),
-    delta_vs_previous_plot = as.numeric(delta_c_index_vs_previous),
-    sequential_p = as.numeric(sequential_lr_p_vs_previous),
-    sequential_chi2 = as.numeric(sequential_lr_chi2_vs_previous),
+    apparent_c_index = to_numeric_safe(c_index),
+    apparent_base_c_index = to_numeric_safe(base_c_index),
+    apparent_delta_vs_base = to_numeric_safe(delta_c_index_vs_base),
+    apparent_delta_vs_previous = to_numeric_safe(delta_c_index_vs_previous),
+
+    cv_c_index_numeric = if ("cv_c_index" %in% names(.)) to_numeric_safe(cv_c_index) else NA_real_,
+    cv_base_c_index_numeric = if ("cv_base_c_index" %in% names(.)) to_numeric_safe(cv_base_c_index) else NA_real_,
+    cv_delta_vs_base_numeric = if ("delta_cv_c_index_vs_base" %in% names(.)) to_numeric_safe(delta_cv_c_index_vs_base) else NA_real_,
+    cv_delta_vs_previous_numeric = if ("delta_cv_c_index_vs_previous" %in% names(.)) to_numeric_safe(delta_cv_c_index_vs_previous) else NA_real_,
+
+    sequential_p = to_numeric_safe(sequential_lr_p_vs_previous),
+    sequential_chi2 = to_numeric_safe(sequential_lr_chi2_vs_previous),
 
     model_label = if_else(
       is_baseline,
@@ -324,7 +419,10 @@ plot_dat <- disease_dat_all %>%
 if (nrow(plot_dat) < 2L) {
   stop(
     "Fewer than two successful cumulative models are available for ",
-    disease_code_clean, ".",
+    disease_code_clean,
+    " using C_INDEX_TYPE='",
+    C_INDEX_TYPE,
+    "'.",
     call. = FALSE
   )
 }
@@ -345,7 +443,10 @@ final_row <- plot_dat %>%
   arrange(desc(cumulative_step)) %>%
   slice(1)
 
-# Stable color palette by modality.
+# -----------------------------------------------------------------------------
+# Stable color palette by modality
+# -----------------------------------------------------------------------------
+
 modality_palette <- c(
   "Baseline" = "#444444",
   "Proteomics" = "#2F5D8C",
@@ -370,9 +471,31 @@ N_case_value <- plot_dat$N_case[1]
 N_noncase_value <- plot_dat$N_noncase[1]
 event_rate_value <- plot_dat$event_rate[1]
 median_followup_value <- plot_dat$median_followup_years[1]
-rank_p_threshold_value <- plot_dat$rank_p_threshold[1]
-analysis_clock_set_value <- plot_dat$analysis_clock_set[1]
-complete_case_mode_value <- plot_dat$complete_case_mode[1]
+
+rank_p_threshold_value <- if ("rank_p_threshold" %in% names(plot_dat)) {
+  plot_dat$rank_p_threshold[1]
+} else {
+  NA
+}
+
+analysis_clock_set_value <- if ("analysis_clock_set" %in% names(plot_dat)) {
+  plot_dat$analysis_clock_set[1]
+} else {
+  NA
+}
+
+complete_case_mode_value <- if ("complete_case_mode" %in% names(plot_dat)) {
+  plot_dat$complete_case_mode[1]
+} else {
+  NA
+}
+
+cv_folds_value <- if ("cv_folds" %in% names(plot_dat)) {
+  suppressWarnings(unique(plot_dat$cv_folds[!is.na(plot_dat$cv_folds)]))
+} else {
+  NA
+}
+cv_folds_value <- if (length(cv_folds_value) > 0L) cv_folds_value[1] else NA
 
 low_epv_steps <- plot_dat %>%
   filter(!is_baseline, low_EPV_bool %in% TRUE) %>%
@@ -386,6 +509,21 @@ low_epv_caption <- if (length(low_epv_steps) > 0L) {
   )
 } else {
   ""
+}
+
+metric_caption <- if (C_INDEX_TYPE == "cv") {
+  paste0(
+    "Y-axis shows ",
+    metric_label,
+    ifelse(!is.na(cv_folds_value), paste0(" (", cv_folds_value, " folds)"), ""),
+    ". Step-wise significance symbols are based on sequential likelihood-ratio tests from the corresponding apparent Cox models."
+  )
+} else {
+  paste0(
+    "Y-axis shows ",
+    metric_label,
+    ". Sequential LRT significance: * P<0.05, ** P<0.01, *** P<0.001."
+  )
 }
 
 # Dynamic y-axis limits with room for labels.
@@ -459,10 +597,11 @@ p <- ggplot(
   ) +
   labs(
     x = "Sequential cumulative model",
-    y = "Harrell C-index",
+    y = metric_label,
     title = paste0(
       DISEASE_NAME,
-      " (", disease_code_clean,
+      " (",
+      disease_code_clean,
       "): cumulative prediction by omics mortality EPOCH clocks"
     ),
     subtitle = paste0(
@@ -470,16 +609,26 @@ p <- ggplot(
       "clocks are added by disease-specific HR among significant signals"
     ),
     caption = paste0(
-      "N = ", scales::comma(N_value),
-      "; cases/noncases = ", scales::comma(N_case_value), "/",
+      "N = ",
+      scales::comma(N_value),
+      "; cases/noncases = ",
+      scales::comma(N_case_value),
+      "/",
       scales::comma(N_noncase_value),
-      "; event rate = ", scales::percent(event_rate_value, accuracy = 0.1),
-      "; median follow-up = ", sprintf("%.2f", median_followup_value),
-      " years. Baseline C = ", sprintf("%.3f", baseline_c),
-      "; maximum C = ", sprintf("%.3f", best_row$c_index_plot),
-      " at step ", best_row$cumulative_step,
-      " (ΔC = ", sprintf("%+.4f", best_row$c_index_plot - baseline_c), "). ",
-      "Sequential LRT significance: * P<0.05, ** P<0.01, *** P<0.001.",
+      "; event rate = ",
+      scales::percent(event_rate_value, accuracy = 0.1),
+      "; median follow-up = ",
+      sprintf("%.2f", median_followup_value),
+      " years. Baseline C = ",
+      sprintf("%.3f", baseline_c),
+      "; maximum C = ",
+      sprintf("%.3f", best_row$c_index_plot),
+      " at step ",
+      best_row$cumulative_step,
+      " (ΔC = ",
+      sprintf("%+.4f", best_row$c_index_plot - baseline_c),
+      "). ",
+      metric_caption,
       low_epv_caption
     )
   ) +
@@ -498,18 +647,22 @@ p <- ggplot(
     ),
     axis.title = element_text(
       size = 12,
-      face = "bold"
+      face = "bold",
+      color = "black"
     ),
     plot.title = element_text(
       size = 15,
-      face = "bold"
+      face = "bold",
+      color = "black"
     ),
     plot.subtitle = element_text(
-      size = 10.5
+      size = 10.5,
+      color = "black"
     ),
     plot.caption = element_text(
       size = 8.2,
       hjust = 0,
+      color = "black",
       margin = margin(t = 10)
     ),
     panel.grid.major.y = element_line(
@@ -518,7 +671,8 @@ p <- ggplot(
     ),
     panel.grid.minor = element_blank(),
     legend.position = "bottom",
-    legend.title = element_text(face = "bold"),
+    legend.title = element_text(face = "bold", color = "black"),
+    legend.text = element_text(color = "black"),
     plot.margin = margin(12, 20, 12, 12)
   )
 
@@ -592,22 +746,22 @@ safe_disease <- safe_filename(paste0(disease_code_clean, "_", DISEASE_NAME))
 
 pdf_path <- file.path(
   OUTPUT_DIR,
-  paste0("Cumulative_Cindex_EPOCH_PM_", safe_disease, ".pdf")
+  paste0("Cumulative_Cindex_EPOCH_PM_", safe_disease, "_", metric_tag, ".pdf")
 )
 
 png_path <- file.path(
   OUTPUT_DIR,
-  paste0("Cumulative_Cindex_EPOCH_PM_", safe_disease, ".png")
+  paste0("Cumulative_Cindex_EPOCH_PM_", safe_disease, "_", metric_tag, ".png")
 )
 
 plot_data_path <- file.path(
   OUTPUT_DIR,
-  paste0("Cumulative_Cindex_EPOCH_PM_", safe_disease, "_plot_data.tsv")
+  paste0("Cumulative_Cindex_EPOCH_PM_", safe_disease, "_", metric_tag, "_plot_data.tsv")
 )
 
 summary_path <- file.path(
   OUTPUT_DIR,
-  paste0("Cumulative_Cindex_EPOCH_PM_", safe_disease, "_summary.txt")
+  paste0("Cumulative_Cindex_EPOCH_PM_", safe_disease, "_", metric_tag, "_summary.txt")
 )
 
 ggsave(
@@ -635,6 +789,7 @@ plot_export <- plot_dat %>%
   transmute(
     disease_id = disease_code_clean,
     disease_name = DISEASE_NAME,
+    c_index_type = C_INDEX_TYPE,
     cumulative_step,
     added_clock,
     added_organ,
@@ -646,10 +801,22 @@ plot_export <- plot_dat %>%
     N_noncase,
     event_rate,
     median_followup_years,
-    c_index = c_index_plot,
-    base_c_index = base_c_index_plot,
-    delta_c_index_vs_base = delta_vs_base_plot,
-    delta_c_index_vs_previous = delta_vs_previous_plot,
+
+    plotted_c_index = c_index_plot,
+    plotted_base_c_index = base_c_index_plot,
+    plotted_delta_c_index_vs_base = delta_vs_base_plot,
+    plotted_delta_c_index_vs_previous = delta_vs_previous_plot,
+
+    apparent_c_index,
+    apparent_base_c_index,
+    apparent_delta_c_index_vs_base = apparent_delta_vs_base,
+    apparent_delta_c_index_vs_previous = apparent_delta_vs_previous,
+
+    cv_c_index = cv_c_index_numeric,
+    cv_base_c_index = cv_base_c_index_numeric,
+    delta_cv_c_index_vs_base = cv_delta_vs_base_numeric,
+    delta_cv_c_index_vs_previous = cv_delta_vs_previous_numeric,
+
     sequential_lr_chi2_vs_previous = sequential_chi2,
     sequential_lr_p_vs_previous = sequential_p,
     sequential_significance = sequential_sig,
@@ -662,7 +829,8 @@ plot_export <- plot_dat %>%
     events_per_parameter,
     low_EPV_flag = low_EPV_bool,
     rank_significant = rank_significant_bool,
-    status
+    apparent_status = status,
+    plot_status
   )
 
 readr::write_tsv(plot_export, plot_data_path)
@@ -670,6 +838,8 @@ readr::write_tsv(plot_export, plot_data_path)
 summary_lines <- c(
   paste0("Input file: ", INPUT_FILE),
   paste0("Disease: ", DISEASE_NAME, " (", disease_code_clean, ")"),
+  paste0("C-index type plotted: ", C_INDEX_TYPE),
+  paste0("Metric label: ", metric_label),
   paste0("Analysis clock set: ", analysis_clock_set_value),
   paste0("Complete-case mode: ", complete_case_mode_value),
   paste0("Rank P threshold: ", rank_p_threshold_value),
@@ -680,19 +850,19 @@ summary_lines <- c(
   paste0("Median follow-up years: ", sprintf("%.6f", median_followup_value)),
   paste0("Successful models plotted: ", nrow(plot_dat)),
   paste0("Failed/unavailable models omitted: ", nrow(failed_models)),
-  paste0("Baseline C-index: ", sprintf("%.6f", baseline_c)),
+  paste0("Baseline plotted C-index: ", sprintf("%.6f", baseline_c)),
   paste0(
-    "Final C-index: ",
+    "Final plotted C-index: ",
     sprintf("%.6f", final_row$c_index_plot),
     " at step ",
     final_row$cumulative_step
   ),
   paste0(
-    "Final improvement over baseline: ",
+    "Final plotted improvement over baseline: ",
     sprintf("%.6f", final_row$c_index_plot - baseline_c)
   ),
   paste0(
-    "Maximum C-index: ",
+    "Maximum plotted C-index: ",
     sprintf("%.6f", best_row$c_index_plot),
     " at step ",
     best_row$cumulative_step,
@@ -700,7 +870,7 @@ summary_lines <- c(
     best_row$added_clock
   ),
   paste0(
-    "Maximum improvement over baseline: ",
+    "Maximum plotted improvement over baseline: ",
     sprintf("%.6f", best_row$c_index_plot - baseline_c)
   ),
   paste0(
@@ -716,19 +886,20 @@ writeLines(summary_lines, summary_path)
 
 message("Disease: ", DISEASE_NAME, " (", disease_code_clean, ")")
 message("Input: ", INPUT_FILE)
-message("Baseline C-index: ", sprintf("%.4f", baseline_c))
+message("C-index type: ", C_INDEX_TYPE)
+message("Baseline plotted C-index: ", sprintf("%.4f", baseline_c))
 message(
-  "Final C-index: ",
+  "Final plotted C-index: ",
   sprintf("%.4f", final_row$c_index_plot),
-  " | final ΔC: ",
+  " | final plotted Delta C: ",
   sprintf("%+.4f", final_row$c_index_plot - baseline_c)
 )
 message(
-  "Best C-index: ",
+  "Best plotted C-index: ",
   sprintf("%.4f", best_row$c_index_plot),
   " at step ",
   best_row$cumulative_step,
-  " | best ΔC: ",
+  " | best plotted Delta C: ",
   sprintf("%+.4f", best_row$c_index_plot - baseline_c)
 )
 message("Wrote PDF: ", pdf_path)
