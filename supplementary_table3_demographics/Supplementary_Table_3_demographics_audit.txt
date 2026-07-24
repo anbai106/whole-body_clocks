@@ -1,0 +1,35 @@
+Supplementary Table 3 demographic extraction audit
+
+ADNI
+----
+adni: no input file found/provided.
+
+NHANES
+------
+nhanes: no input file found/provided.
+
+MHAS
+----
+mhas: file=/Users/hao/Dropbox/MHAS/step1_2001_mortality_epoch/mhas_2001_step1_clean_analytic_cohort.tsv
+  rows after participant deduplication: 14511
+  id_col=participant_id
+  age_col=age_2001, nonmissing_age=14511
+  sex_col=sex, nonmissing_sex=14511
+  female_n=8310, female_pct=57.26690097167666
+  status=ok
+
+Output files
+------------
+TSV: supplementary_table3_demographics/Supplementary_Table_3_demographics_filled.tsv
+CSV: supplementary_table3_demographics/Supplementary_Table_3_demographics_filled.csv
+Markdown: supplementary_table3_demographics/Supplementary_Table_3_demographics_filled.md
+
+Notes
+-----
+- N is computed after deduplicating participants by the detected ID column when available.
+- Age is reported as mean plus/minus SD.
+- Sex is reported as female count / female percentage.
+- ADNI country is set to USA/Canada by default.
+- NHANES country is set to USA.
+- MHAS country is set to Mexico.
+- FinnGen and PGC are summary-level GWAS resources, so individual-level age and sex are marked NA^b.

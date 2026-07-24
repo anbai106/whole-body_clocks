@@ -1,0 +1,11 @@
+Data type	BAG/Omics	Study	Country	N	Age	Sex (female)	Source file	Status
+Individual	MRI	UKBB	UK	43,135	64.15±7.53	19,744/53%	manuscript_existing_value	existing value from current table
+Individual	Proteomics	UKBB	UK	50,316	64.16±8.04	28,581/54%	manuscript_existing_value	existing value from current table
+Individual	Metabolomics	UKBB	UK	274,247	56.56±8.08	147,994/54%	manuscript_existing_value	existing value from current table
+Individual	Genetics	UKBB	UK	342,341	56.80±7.91	181,440/53%	manuscript_existing_value	existing value from current table
+Individual	Mortality & disease diagnosis	UKBB	UK	494,951	56.53±8.09	268,970/54%	manuscript_existing_value	existing value from current table
+Individual	Brain MRI	ADNI	USA/Canada	TODO	TODO±TODO	TODO/TODO %		TODO: input file not found or not provided
+Individual	Survey and lab biomarkers & mortality	NHANES	USA	TODO	TODO±TODO	TODO/TODO %		TODO: input file not found or not provided
+Individual	Survey and lab biomarkers & mortality	MHAS	Mexico	14,511	60.50±10.70	8,310/57%	/Users/hao/Dropbox/MHAS/step1_2001_mortality_epoch/mhas_2001_step1_clean_analytic_cohort.tsv	ok
+Summary	Genetics	FinnGen	Finland	521	NAᵇ	NAᵇ	summary-level GWAS statistics	existing value from current table
+Summary	Genetics	PGC	Global	6	NAᵇ	NAᵇ	summary-level GWAS statistics	existing value from current table
