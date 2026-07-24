@@ -22,6 +22,7 @@ OUTDIR="${OUTDIR:-${PROJECT_ROOT}/apoe_external}"
 LOGDIR="${OUTDIR}/logs"
 RESULTDIR="${OUTDIR}/results"
 
+PY_SCRIPT="${PY_SCRIPT:-/cbica/home/wenju/Project/whole-body_clocks/ADNI/2_other_studies/compare_external_ad_epoch_apoe.py}"
 SAMPLE_FILE="${SAMPLE_FILE:-${PROJECT_ROOT}/external_5_studies_istaging.tsv}"
 PREDICTION_FILE="${PREDICTION_FILE:-${PROJECT_ROOT}/results_external_longitudinal_ad_epoch_harmonized/external_5_studies_adni_brain_mri_ad_epoch_harmonized_scan_level_predictions.tsv}"
 
