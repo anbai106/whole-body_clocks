@@ -2,8 +2,8 @@
 #SBATCH --job-name=apply_ad_epoch_ext_dual
 #SBATCH --partition=all
 #SBATCH --time=12:00:00
-#SBATCH --cpus-per-task=2
-#SBATCH --mem=64G
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=32G
 #SBATCH --output=/cbica/home/wenju/output/apply_ad_epoch_external_dual_%j.out
 #SBATCH --error=/cbica/home/wenju/output/apply_ad_epoch_external_dual_%j.err
 
@@ -30,13 +30,14 @@ MIN_ROI_FRACTION="${MIN_ROI_FRACTION:-0.80}"
 AGE_MODE="${AGE_MODE:-row}"
 RISK_TIMES="${RISK_TIMES:-1,2,3,5}"
 
-# Default behavior is to run both modes. Override with, for example:
+# Run both modes by default.
+# Examples:
 #   sbatch --export=ALL,RUN_MODES=raw submit_apply_ad_epoch_external_longitudinal_dual.sh
 #   sbatch --export=ALL,RUN_MODES=harmonized submit_apply_ad_epoch_external_longitudinal_dual.sh
 RUN_MODES="${RUN_MODES:-raw,harmonized}"
 
-# Strict harmonized mode is the default: no raw fallback is used. Set to 1 to
-# fill missing harmonized ROI values from raw MUSE values within the harmonized run.
+# 0 = strict harmonized mode with no raw fallback
+# 1 = fill missing harmonized ROI values using raw MUSE values
 HARMONIZED_ALLOW_RAW_FALLBACK="${HARMONIZED_ALLOW_RAW_FALLBACK:-0}"
 
 mkdir -p "${LOGDIR}" "${RAW_OUTDIR}" "${HARMONIZED_OUTDIR}"
@@ -45,6 +46,7 @@ source activate survival_clock
 
 python3 - <<'PY'
 import importlib.util
+
 required = ["pandas", "numpy", "sklearn", "sksurv", "joblib"]
 missing = [name for name in required if importlib.util.find_spec(name) is None]
 if missing:
@@ -90,33 +92,34 @@ run_application() {
         cmd+=(--allow-raw-roi-fallback)
     fi
 
+    echo "Running ROI source: ${roi_source}"
+    echo "Output directory: ${outdir}"
+    echo "Output prefix: ${prefix}"
+    echo "Allow raw fallback: ${allow_raw_fallback}"
+
     "${cmd[@]}"
 }
 
 IFS=',' read -r -a MODES <<< "${RUN_MODES}"
 
 for mode in "${MODES[@]}"; do
-    mode="$(echo "${mode}" | tr -d '[:space:]')"
+    mode="${mode//[[:space:]]/}"
 
     case "${mode}" in
         raw)
             run_application \
                 "raw" \
                 "${RAW_OUTDIR}" \
-                "external_5_studies_adni_brain_mri_ad_epoch_raw"
+                "external_5_studies_adni_brain_mri_ad_epoch_raw" \
+                "0"
             ;;
 
         harmonized)
-            harmonized_extra=()
-            if [[ "${HARMONIZED_ALLOW_RAW_FALLBACK}" == "1" ]]; then
-                harmonized_extra+=(--allow-raw-roi-fallback)
-            fi
-
             run_application \
                 "harmonized" \
                 "${HARMONIZED_OUTDIR}" \
                 "external_5_studies_adni_brain_mri_ad_epoch_harmonized" \
-                "${harmonized_extra[@]}"
+                "${HARMONIZED_ALLOW_RAW_FALLBACK}"
             ;;
 
         "")
