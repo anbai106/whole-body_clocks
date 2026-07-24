@@ -62,38 +62,35 @@ run_application() {
     local roi_source="$1"
     local outdir="$2"
     local prefix="$3"
-    shift 3
-    local extra_args=("$@")
+    local allow_raw_fallback="${4:-0}"
 
-    echo "============================================================"
-    echo "Starting external AD EPOCH application"
-    echo "ROI source: ${roi_source}"
-    echo "Output directory: ${outdir}"
-    echo "Prefix: ${prefix}"
-    echo "============================================================"
+    local -a cmd=(
+        python3 "${PY_SCRIPT}"
+        --input-file "${EXTERNAL_FILE}"
+        --model-joblib "${MODEL_JOBLIB}"
+        --outdir "${outdir}"
+        --prefix "${prefix}"
+        --id-col "PTID"
+        --visit-col "Visit_Code"
+        --date-col "Date"
+        --age-col "Age"
+        --sex-col "Sex"
+        --dlicv-col "DLICV"
+        --site-col "SITE"
+        --study-col "Study"
+        --dx-col "DX_Binary"
+        --delta-baseline-col "Delta_Baseline"
+        --roi-source "${roi_source}"
+        --min-roi-fraction "${MIN_ROI_FRACTION}"
+        --age-mode "${AGE_MODE}"
+        --risk-times "${RISK_TIMES}"
+    )
 
-    python3 "${PY_SCRIPT}" \
-      --input-file "${EXTERNAL_FILE}" \
-      --model-joblib "${MODEL_JOBLIB}" \
-      --outdir "${outdir}" \
-      --prefix "${prefix}" \
-      --id-col "PTID" \
-      --visit-col "Visit_Code" \
-      --date-col "Date" \
-      --age-col "Age" \
-      --sex-col "Sex" \
-      --dlicv-col "DLICV" \
-      --site-col "SITE" \
-      --study-col "Study" \
-      --dx-col "DX_Binary" \
-      --delta-baseline-col "Delta_Baseline" \
-      --roi-source "${roi_source}" \
-      --min-roi-fraction "${MIN_ROI_FRACTION}" \
-      --age-mode "${AGE_MODE}" \
-      --risk-times "${RISK_TIMES}" \
-      "${extra_args[@]}"
+    if [[ "${allow_raw_fallback}" == "1" ]]; then
+        cmd+=(--allow-raw-roi-fallback)
+    fi
 
-    echo "Finished ROI source: ${roi_source}"
+    "${cmd[@]}"
 }
 
 IFS=',' read -r -a MODES <<< "${RUN_MODES}"
