@@ -5,6 +5,7 @@
 #SBATCH --time=05:00:00
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=24G
+#SBATCH --partition=bioinformatics
 
 # Compare the baseline AD EPOCH score with clinical, CSF, SPARE-AD, and
 # SPARE-BA predictors of MCI-to-AD conversion.
