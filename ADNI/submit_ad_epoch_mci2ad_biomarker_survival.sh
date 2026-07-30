@@ -2,9 +2,9 @@
 #SBATCH --job-name=ad_epoch_mci2ad_biomarkers
 #SBATCH --output=/cbica/home/wenju/Reproducibile_paper/WholeBodyClock/adni_lepoch/logs/ad_epoch_mci2ad_biomarkers_%j.out
 #SBATCH --error=/cbica/home/wenju/Reproducibile_paper/WholeBodyClock/adni_lepoch/logs/ad_epoch_mci2ad_biomarkers_%j.err
-#SBATCH --time=08:00:00
-#SBATCH --cpus-per-task=2
-#SBATCH --mem=32G
+#SBATCH --time=05:00:00
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=24G
 
 # Compare the baseline AD EPOCH score with clinical, CSF, SPARE-AD, and
 # SPARE-BA predictors of MCI-to-AD conversion.
