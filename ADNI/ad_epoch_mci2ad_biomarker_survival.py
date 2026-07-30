@@ -264,10 +264,13 @@ def select_exact_baseline_rows(
     qc: list[dict] = []
     grouped = {pid: group.copy() for pid, group in a.groupby(args.id_col, sort=False)}
 
-    for rec in s.itertuples(index=False):
-        pid = str(getattr(rec, args.id_col)).strip()
-        baseline_visit = str(getattr(rec, args.baseline_visit_col)).strip().lower()
-        baseline_date = getattr(rec, "_baseline_date")
+    # Use iterrows() rather than itertuples() because pandas may rename
+    # columns that begin with an underscore (for example, _baseline_date),
+    # making attribute access unreliable.
+    for _, rec in s.iterrows():
+        pid = str(rec[args.id_col]).strip()
+        baseline_visit = str(rec["_baseline_visit"]).strip().lower()
+        baseline_date = rec["_baseline_date"]
         g = grouped.get(pid)
 
         selected = None
@@ -299,6 +302,8 @@ def select_exact_baseline_rows(
         qc.append(
             {
                 args.id_col: pid,
+                "selected_baseline_visit_code": rec[args.baseline_visit_col],
+                "selected_baseline_date": baseline_date,
                 "baseline_match_method": match_method,
                 "baseline_match_date_difference_days": date_difference,
                 "baseline_row_found": selected is not None,
