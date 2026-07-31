@@ -11,10 +11,13 @@ Disease-free control rule:
   The ICD input must be the *_diagnosis_clock_disease_free.tsv file, in which non-cases are the predefined disease-free controls (CN). This script preserves that case/control population and does not replace CN with endpoint-negative controls.
 
 Test-only rule:
-  For each mortality-clock/BAG pair, the mortality EPOCH score is loaded from that clock's
-  *_mortality_clock_test_predictions.tsv file. The matched BAG is then evaluated on exactly
-  the same held-out test participants after applying the original time-origin, incident-case,
-  covariate, and pairwise complete-case filters. All other analysis steps are unchanged.
+  For each mortality-clock/BAG pair, held-out participant IDs are taken from that clock's
+  *_mortality_clock_test_predictions.tsv file. The mortality EPOCH predictor is the exact
+  *_mortality_clock_acceleration_z column from the sibling full *_mortality_clock_predictions.tsv
+  file, restricted to those held-out test IDs. This matches the clock representation used in
+  the original full-sample disease-onset analysis while preserving the untouched test population.
+  The matched BAG is evaluated on exactly the same participants after the original time-origin,
+  incident-case, covariate, and pairwise complete-case filters.
 """
 
 import argparse
@@ -392,59 +395,42 @@ def discover_test_prediction_files(root: str) -> Dict[str, str]:
     return mapping
 
 
-def choose_test_score_column(df: pd.DataFrame, clock: str, path: str) -> str:
-    """Choose the mortality EPOCH risk-score column without using outcome columns."""
-    candidates = [
-        clock,
-        f"{clock}_mortality_risk_score",
-        f"{clock}_mortality_clock_risk_score",
-        f"{clock}_mortality_clock",
-        f"{clock}_risk_score",
-        "mortality_risk_score",
-        "risk_score",
-        "predicted_risk",
-        "partial_hazard",
-    ]
+def expected_acceleration_column(clock: str) -> str:
+    """Return the exact mortality-clock acceleration-z column used in full-sample analyses."""
+    return f"{clock}_mortality_clock_acceleration_z"
+
+from typing import Optional
+
+def find_column_case_insensitive(
+    df: pd.DataFrame,
+    requested: str
+) -> Optional[str]:
     lower_to_actual = {str(c).lower(): c for c in df.columns}
-    for candidate in candidates:
-        actual = lower_to_actual.get(candidate.lower())
-        if actual is not None:
-            return actual
+    return lower_to_actual.get(requested.lower())
 
-    # Robust fallback for clock-specific exported risk columns.
-    excluded_tokens = (
-        "acceleration", "clock_age", "age_year", "time", "duration",
-        "event", "death", "case", "split", "fold", "quartile", "absolute_risk",
-    )
-    ranked = []
-    for col in df.columns:
-        low = str(col).lower()
-        if any(token in low for token in excluded_tokens):
-            continue
-        if low.endswith("_mortality_risk_score"):
-            ranked.append((0, col))
-        elif low.endswith("_risk_score"):
-            ranked.append((1, col))
-        elif "risk" in low and pd.to_numeric(df[col], errors="coerce").notna().any():
-            ranked.append((2, col))
-    if ranked:
-        ranked.sort(key=lambda x: (x[0], str(x[1]).lower()))
-        return ranked[0][1]
 
-    raise ValueError(
-        f"Could not identify the mortality EPOCH risk-score column in {path}. "
-        f"Available columns: {list(df.columns)}"
-    )
+def sibling_full_predictions_path(test_path: str) -> str:
+    suffix = "_mortality_clock_test_predictions.tsv"
+    if not test_path.endswith(suffix):
+        raise ValueError(f"Unexpected test prediction filename: {test_path}")
+    return test_path[: -len(suffix)] + "_mortality_clock_predictions.tsv"
 
 
 def read_test_clock_predictions(
     args, pair: Dict[str, str], file_map: Dict[str, str]
 ) -> Tuple[pd.DataFrame, str, str]:
-    """Read one clock's held-out test predictions and return ID plus score."""
+    """
+    Return held-out test IDs paired with mortality-clock acceleration z.
+
+    Test membership is defined by *_mortality_clock_test_predictions.tsv. The exact
+    acceleration-z values are read from the sibling *_mortality_clock_predictions.tsv
+    and restricted to those held-out IDs. This prevents accidental use of the raw risk
+    score while preserving the original held-out test population.
+    """
     clock = pair["clock"]
     key = clock.lower()
-    path = file_map.get(key)
-    if path is None:
+    test_path = file_map.get(key)
+    if test_path is None:
         expected = os.path.join(
             args.test_predictions_root,
             f"{clock}_mortality_clock",
@@ -454,41 +440,74 @@ def read_test_clock_predictions(
             f"No held-out test prediction file found for {clock}. Expected a file like: {expected}"
         )
 
-    pred = pd.read_csv(path, sep="\t", low_memory=False)
+    test_df = pd.read_csv(test_path, sep="\t", low_memory=False)
     id_candidates = ["participant_id", "eid", "ID", "id"]
-    id_col = next((c for c in id_candidates if c in pred.columns), None)
-    if id_col is None:
-        raise ValueError(f"No participant ID column found in {path}; columns={list(pred.columns)}")
+    test_id_col = next((c for c in id_candidates if c in test_df.columns), None)
+    if test_id_col is None:
+        raise ValueError(
+            f"No participant ID column found in test file {test_path}; columns={list(test_df.columns)}"
+        )
 
-    if "split" in pred.columns:
-        split_values = pred["split"].astype(str).str.strip().str.lower()
-        test_mask = split_values.eq("test")
-        if test_mask.any():
-            pred = pred.loc[test_mask].copy()
+    if "split" in test_df.columns:
+        split_values = test_df["split"].astype(str).str.strip().str.lower()
+        if split_values.eq("test").any():
+            test_df = test_df.loc[split_values.eq("test")].copy()
 
-    score_col = choose_test_score_column(pred, clock, path)
-    out = pred[[id_col, score_col]].copy().rename(
-        columns={id_col: "participant_id", score_col: "test_clock_score"}
+    test_ids = test_df[[test_id_col]].copy().rename(columns={test_id_col: "participant_id"})
+    test_ids = normalize_participant_id(test_ids, "participant_id")
+    test_ids = test_ids.drop_duplicates("participant_id", keep="first")
+
+    full_path = sibling_full_predictions_path(test_path)
+    if not os.path.exists(full_path) or os.path.getsize(full_path) == 0:
+        raise FileNotFoundError(
+            f"Sibling full prediction file required for acceleration z is missing or empty: {full_path}"
+        )
+
+    full_df = pd.read_csv(full_path, sep="\t", low_memory=False)
+    full_id_col = next((c for c in id_candidates if c in full_df.columns), None)
+    if full_id_col is None:
+        raise ValueError(
+            f"No participant ID column found in full prediction file {full_path}; columns={list(full_df.columns)}"
+        )
+
+    requested_col = expected_acceleration_column(clock)
+    score_col = find_column_case_insensitive(full_df, requested_col)
+    if score_col is None:
+        acceleration_candidates = [
+            c for c in full_df.columns
+            if str(c).lower().endswith("_mortality_clock_acceleration_z")
+        ]
+        raise ValueError(
+            f"Required acceleration-z column '{requested_col}' was not found in {full_path}. "
+            f"Acceleration-z candidates: {acceleration_candidates}"
+        )
+
+    score_df = full_df[[full_id_col, score_col]].copy().rename(
+        columns={full_id_col: "participant_id", score_col: "test_clock_score"}
     )
-    out = normalize_participant_id(out, "participant_id")
-    out["test_clock_score"] = pd.to_numeric(out["test_clock_score"], errors="coerce")
-    out = out.dropna(subset=["test_clock_score"]).copy()
+    score_df = normalize_participant_id(score_df, "participant_id")
+    score_df["test_clock_score"] = pd.to_numeric(score_df["test_clock_score"], errors="coerce")
+    score_df = score_df.dropna(subset=["test_clock_score"]).copy()
 
-    # One score per participant is required. Exact duplicate rows are harmless;
-    # conflicting duplicate scores indicate a malformed prediction export.
-    duplicate_ids = out.loc[out["participant_id"].duplicated(False), "participant_id"].unique()
+    duplicate_ids = score_df.loc[score_df["participant_id"].duplicated(False), "participant_id"].unique()
     if len(duplicate_ids) > 0:
         conflicts = (
-            out[out["participant_id"].isin(duplicate_ids)]
+            score_df[score_df["participant_id"].isin(duplicate_ids)]
             .groupby("participant_id")["test_clock_score"]
             .nunique(dropna=True)
         )
         if (conflicts > 1).any():
             bad = conflicts[conflicts > 1].index.astype(str).tolist()[:10]
-            raise ValueError(f"Conflicting duplicate test scores in {path} for IDs: {bad}")
-        out = out.drop_duplicates("participant_id", keep="first")
+            raise ValueError(f"Conflicting acceleration-z values in {full_path} for IDs: {bad}")
+        score_df = score_df.drop_duplicates("participant_id", keep="first")
 
-    return out, path, score_col
+    out = test_ids.merge(score_df, on="participant_id", how="inner", validate="one_to_one")
+    if out.empty:
+        raise ValueError(
+            f"No held-out test IDs from {test_path} matched acceleration-z values in {full_path}."
+        )
+
+    return out, full_path, score_col
 
 
 def construct_survival_data(args) -> Tuple[pd.DataFrame, str]:
@@ -667,7 +686,9 @@ def empty_result(disease_id: str, pair: Dict[str, str], status: str, error: str 
         "epoch_population": "held_out_test_only",
         "control_population": "disease_free_CN",
         "test_prediction_file": "",
+        "test_membership_file": "",
         "test_score_column": "",
+        "clock_representation": "mortality_clock_acceleration_z",
         "status": status,
         "error": error,
     }
@@ -719,6 +740,7 @@ def analyze_pair(
     pair_data[clock] = pair_data["test_clock_score"]
     test_metadata = {
         "test_prediction_file": test_file,
+        "test_membership_file": file_map.get(clock.lower(), ""),
         "test_score_column": test_score_col,
         "N_test_prediction_available": int(test_pred.shape[0]),
         "N_test_merged_before_complete_case": int(pair_data.shape[0]),
