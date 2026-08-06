@@ -97,7 +97,7 @@ for organ in ['Reproductive_female', 'Pulmonary', 'Heart', 'Brain', 'Eye', 'Hepa
     fastgwa_fam = "/Users/hao/cubic-home/Dataset/UKBB/UKBB_genetic_preprocess_all/S3_apply_all/chr_all_AllUKBBPeople.fam"
     prepare_data(df_data, cov_tsv, output_dir, fastgwa_fam)
 
-### 5 metabolomics mortality clock
+### 4 metabolomics mortality clock
 for organ in ['Endocrine', 'Digestive', 'Hepatic', 'Immune']:
     organ_small = organ.lower()
     tsv = os.path.join('/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock', organ + "_metabolomics_mortality_clock", organ_small + "_metabolomics_mortality_clock_predictions.tsv")

@@ -3,7 +3,7 @@
 Collect and summarize comparative survival-analysis results for mortality clocks versus BAGs.
 
 Input: one TSV per ICD endpoint, e.g.
-  cox_compare_clock_vs_BAG_I10.tsv
+  cox_compare_clock_vs_BAG_test_only_disease_free_I10.tsv
 
 Each TSV is expected to contain one row per clock/BAG pair with columns produced by
 survival_analysis_clock_vs_bag.py, including clock_p, bag_p, joint_p_diff,
@@ -34,17 +34,17 @@ import pandas as pd
 # =========================
 # Edit these paths here if you move the project between CUBIC and local Mac.
 ICD_LIST = "/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/mortality_clock/SA/data/included_ICD_mortality_clock.tsv"
-INPUT_DIR = "/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/mortality_clock/SA/output_clock_vs_BAG/disease_free"
-OUTPUT_DIR = "/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/Result/clock_vs_BAG_survival_summary/disease_free"
-FILE_PREFIX = "cox_compare_clock_vs_BAG_"
-MIN_CASE = 50
+INPUT_DIR = "/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/mortality_clock/SA/output_clock_vs_BAG_test_only/disease_free"
+OUTPUT_DIR = "/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/Result/clock_vs_BAG_survival_summary/disease_free/holdout_test_only"
+FILE_PREFIX = "cox_compare_clock_vs_BAG_test_only_disease_free_"
+MIN_CASE = 20
 ALPHA = 0.05
 WRITE_EXCEL = True
 ALLOW_GLOB_IF_NO_ICD_LIST = False
 
 # Optional local Mac settings. Uncomment these lines if running locally.
 # ICD_LIST = "/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/mortality_clock/SA/data/included_ICD_mortality_clock.tsv"
-# INPUT_DIR = "/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/mortality_clock/SA/output_clock_vs_BAG/disease_free"
+# INPUT_DIR = "/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/mortality_clock/SA/output_clock_vs_BAG_test_only/disease_free"
 # OUTPUT_DIR = "/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/Result/clock_vs_BAG_survival_summary/disease_free"
 
 def safe_read_tsv(path: Path) -> pd.DataFrame:
@@ -242,8 +242,8 @@ def collect_data(
     icd_list: str,
     input_dir: str,
     output_dir: str,
-    file_prefix: str = "cox_compare_clock_vs_BAG_",
-    min_case: int = 50,
+    file_prefix: str = "cox_compare_clock_vs_BAG_test_only_disease_free_",
+    min_case: int = 20,
     alpha: float = 0.05,
     write_excel: bool = False,
     allow_glob_if_no_icd_list: bool = False,

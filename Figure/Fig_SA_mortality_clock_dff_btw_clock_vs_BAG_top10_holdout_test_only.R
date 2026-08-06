@@ -1,5 +1,10 @@
 # ============================================================
-# Panel D: Clock vs BAG effect-size difference for disease onset
+# Panel D sensitivity analysis: held-out test-only Clock vs BAG effect-size difference for disease onset
+#
+# Population:
+#   Original held-out mortality-clock test participants only
+#   Disease-free controls
+#   Mortality-clock acceleration z scores
 #
 # Fair selection:
 #   Option 1:
@@ -45,13 +50,13 @@ suppressPackageStartupMessages({
 # ----------------------------
 # 1. Input / output
 # ----------------------------
-infile <- "/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/Result/clock_vs_BAG_survival_summary/disease_free/clock_vs_BAG_all_rows_all_status.xlsx"
+infile <- "/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/Result/clock_vs_BAG_survival_summary/disease_free/holdout_test_only/clock_vs_BAG_all_rows_all_status.xlsx"
 
-out_dir <- "/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/Result/clock_vs_BAG_survival_summary/disease_free"
+out_dir <- "/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/Result/clock_vs_BAG_survival_summary/disease_free/holdout_test_only"
 
 out_prefix <- file.path(
   out_dir,
-  "panelD_clock_vs_BAG_FAIR_clock_or_BAG_top10_per_clock_short_disease_labels_cases"
+  "panelD_holdout_test_only_clock_vs_BAG_FAIR_clock_or_BAG_top10_per_clock_short_disease_labels_cases"
 )
 
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
@@ -61,6 +66,7 @@ dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 # ----------------------------
 diff_p_cutoff <- 0.05
 top_n_per_clock <- 10
+min_case <- 20
 
 # Fair comparison selection mode:
 #   "clock_or_bag" = selected if clock_p OR bag_p passes Bonferroni threshold
@@ -110,7 +116,10 @@ required_cols <- c(
   "bag_p",
   "clock_hr",
   "bag_hr",
-  "joint_p_diff"
+  "joint_p_diff",
+  "epoch_population",
+  "control_population",
+  "clock_representation"
 )
 
 missing_cols <- setdiff(required_cols, names(df_raw))
@@ -186,8 +195,31 @@ num_cols <- intersect(
 
 df <- df_raw %>%
   mutate(across(all_of(num_cols), ~ suppressWarnings(as.numeric(.x)))) %>%
+  mutate(
+    epoch_population = as.character(epoch_population),
+    control_population = as.character(control_population),
+    clock_representation = as.character(clock_representation)
+  ) %>%
   filter(status == "ok") %>%
+  filter(N_case >= min_case) %>%
+  filter(epoch_population == "held_out_test_only") %>%
+  filter(control_population == "disease_free_CN") %>%
+  filter(clock_representation == "mortality_clock_acceleration_z") %>%
   filter(!is.na(clock_p), !is.na(bag_p), !is.na(joint_p_diff))
+
+if (nrow(df) == 0) {
+  stop(
+    "No powered held-out test-only rows remained after filtering. ",
+    "Expected epoch_population='held_out_test_only', ",
+    "control_population='disease_free_CN', ",
+    "clock_representation='mortality_clock_acceleration_z', and N_case >= ",
+    min_case, "."
+  )
+}
+
+message("Held-out test-only powered rows retained: ", comma(nrow(df)))
+message("Held-out test-only powered diseases retained: ", comma(n_distinct(df$disease_id)))
+message("Held-out test-only mortality-clock/BAG pairs retained: ", n_distinct(df$mortality_clock))
 
 # ----------------------------
 # 4. Organ ordering and clock labels
@@ -901,7 +933,11 @@ threshold_tbl <- tibble(
   ranking_for_plot = "absolute value of joint_log_HR_diff_clock_minus_BAG",
   difference_test_p = "joint_p_diff",
   difference_p_cutoff = diff_p_cutoff,
-  fair_selection_mode = fair_selection_mode
+  fair_selection_mode = fair_selection_mode,
+  analysis_population = "held_out_test_only",
+  control_population = "disease_free_CN",
+  clock_representation = "mortality_clock_acceleration_z",
+  minimum_cases = min_case
 )
 
 print(threshold_tbl)
@@ -1046,6 +1082,12 @@ sig_all_out <- sig_all %>%
     clock_sig_bonf,
     bag_sig_bonf,
     overpower_class,
+    epoch_population,
+    control_population,
+    clock_representation,
+    test_prediction_file,
+    test_membership_file,
+    test_score_column,
     disease_id,
     icd_clean,
     icd_pretty,
@@ -1228,7 +1270,7 @@ case_header_y <- max(sig_plot_ratio$y, na.rm = TRUE) + 1.1
 plot_height <- max(8.0, 2.8 + 0.135 * nrow(sig_plot_ratio))
 
 subtitle_txt <- paste0(
-  "Disease associations were selected using a fair comparison rule: ",
+  "Held-out test-only disease associations were selected using a fair comparison rule: ",
   if_else(
     fair_selection_mode == "clock_or_bag",
     paste0(
@@ -1247,7 +1289,7 @@ subtitle_txt <- paste0(
 )
 
 caption_txt <- paste0(
-  "Adjusted HR ratio is exp(beta_clock - beta_BAG) from the joint Cox model. ",
+  "Analysis is restricted to original held-out mortality-clock test participants with disease-free controls and uses mortality-clock acceleration z scores. Adjusted HR ratio is exp(beta_clock - beta_BAG) from the joint Cox model. ",
   "Values >1 indicate stronger conditional mortality-clock effects; values <1 indicate stronger BAG effects. ",
   "Triangles indicate joint_p_diff < ",
   diff_p_cutoff,
@@ -1369,7 +1411,7 @@ p_ratio <- ggplot(sig_plot_ratio, aes(y = y)) +
 
   labs(
     tag = "D",
-    title = "Mortality clocks versus matched BAGs across fair-selected disease endpoints",
+    title = "Held-out mortality EPOCH clocks versus matched BAGs across disease endpoints",
     subtitle = subtitle_txt,
     x = "Adjusted HR ratio, mortality clock / BAG",
     y = NULL,
@@ -1615,12 +1657,12 @@ p_loghr <- ggplot(sig_plot_loghr, aes(y = y)) +
 
   labs(
     tag = "D",
-    title = "Mortality clocks versus matched BAGs across fair-selected disease endpoints",
+    title = "Held-out mortality EPOCH clocks versus matched BAGs across disease endpoints",
     subtitle = subtitle_txt,
     x = "Joint log-HR difference, mortality clock - BAG",
     y = NULL,
     caption = paste0(
-      "Values >0 indicate stronger mortality-clock effects; values <0 indicate stronger BAG effects. ",
+      "Analysis is restricted to original held-out mortality-clock test participants with disease-free controls and uses mortality-clock acceleration z scores. Values >0 indicate stronger mortality-clock effects; values <0 indicate stronger BAG effects. ",
       "Y-axis shows ICD10 code + mortality clock; shortened disease names are placed to the right of each effect-size point. ",
       "The far-right column shows cases/non-cases."
     )
@@ -1784,6 +1826,9 @@ readr::write_tsv(
   paste0(out_prefix, "_summary_by_clock_top10_plotted.tsv")
 )
 
+message("Held-out test-only forest-plot workflow completed.")
+message("Input: ", infile)
+message("Output prefix: ", out_prefix)
 message("Saved files:")
 message("  ", paste0(out_prefix, "_fair_selection_thresholds.tsv"))
 message("  ", paste0(out_prefix, "_ICD10_mapping_used.tsv"))
