@@ -78,7 +78,7 @@ analysis_mode <- "all_pairs"
 # Full sample is requested. No train/test restriction is applied.
 # Set to TRUE only for a sensitivity analysis restricted to mortality-clock test
 # participants when the prediction file has a split column.
-restrict_mortality_clock_test_set <- TRUE
+restrict_mortality_clock_test_set <- FALSE
 
 # Complete-case SEM is used within each exposure-mediator pair.
 # WLSMV handles the binary ordered mortality outcome.
@@ -221,11 +221,31 @@ find_mortality_prediction_file <- function(root, mediator_column) {
 }
 
 prepare_mortality_outcome <- function(prediction_file, horizon_years, restrict_test = FALSE) {
-  dat <- read_tsv(prediction_file, show_col_types = FALSE, progress = FALSE)
-
-  required <- c(
-    "participant_id", "sample_date", "death_date", "admin_censor_date"
+  dat <- read_tsv(
+    prediction_file,
+    show_col_types = FALSE,
+    progress = FALSE,
+    na = c("", "NA", "NaN", ".", "-9999")
   )
+
+  # MRI mortality-clock files use imaging_date. Some older/non-MRI files use
+  # sample_date. Accept either name, but always treat it as the landmark date
+  # from which post-MRI mortality follow-up begins.
+  landmark_candidates <- c("imaging_date", "sample_date")
+  landmark_columns <- intersect(landmark_candidates, names(dat))
+
+  if (length(landmark_columns) == 0) {
+    stop(
+      "No MRI landmark-date field found in ", prediction_file,
+      ". Expected one of: ", paste(landmark_candidates, collapse = ", "),
+      ". Available columns: ", paste(names(dat), collapse = ", ")
+    )
+  }
+
+  # Prefer imaging_date for MRI files if both columns happen to be present.
+  landmark_column <- landmark_columns[[1]]
+
+  required <- c("participant_id", "death_date", "admin_censor_date")
   missing_required <- setdiff(required, names(dat))
   if (length(missing_required) > 0) {
     stop(
@@ -234,31 +254,42 @@ prepare_mortality_outcome <- function(prediction_file, horizon_years, restrict_t
     )
   }
 
-  if (restrict_test && "split" %in% names(dat)) {
-    dat <- dat %>% filter(tolower(as.character(split)) == "test")
+  if (restrict_test) {
+    if (!"split" %in% names(dat)) {
+      warning(
+        "restrict_test=TRUE, but no split column was found in ",
+        prediction_file, "; using the full available sample."
+      )
+    } else {
+      dat <- dat %>% filter(tolower(trimws(as.character(split))) == "test")
+    }
   }
 
+  # Rename the selected MRI date to a common internal name. Using .data[[...]]
+  # avoids assuming that every MRI organ file uses the same original header.
   dat <- dat %>%
     transmute(
       participant_id = as.character(participant_id),
-      sample_date = as.Date(sample_date),
+      landmark_date = as.Date(.data[[landmark_column]]),
       death_date = as.Date(death_date),
       admin_censor_date = as.Date(admin_censor_date),
       split = if ("split" %in% names(dat)) as.character(split) else NA_character_
     ) %>%
-    filter(!is.na(sample_date), !is.na(admin_censor_date)) %>%
+    filter(!is.na(participant_id), !is.na(landmark_date), !is.na(admin_censor_date)) %>%
     mutate(
-      death_after_mri = !is.na(death_date) & death_date > sample_date,
-      death_before_admin = death_after_mri & death_date <= admin_censor_date,
+      # A valid observed death must occur after MRI and no later than the
+      # administrative censoring date.
+      death_after_landmark = !is.na(death_date) & death_date > landmark_date,
+      death_before_admin = death_after_landmark & death_date <= admin_censor_date,
       observed_end_date = if_else(
         death_before_admin,
         death_date,
         admin_censor_date
       ),
-      followup_years = as.numeric(observed_end_date - sample_date) / 365.25,
+      followup_years = as.numeric(observed_end_date - landmark_date) / 365.25,
       death_time_years = if_else(
         death_before_admin,
-        as.numeric(death_date - sample_date) / 365.25,
+        as.numeric(death_date - landmark_date) / 365.25,
         NA_real_
       ),
       died_within_horizon = death_before_admin &
@@ -275,23 +306,37 @@ prepare_mortality_outcome <- function(prediction_file, horizon_years, restrict_t
     filter(
       is.finite(followup_years),
       followup_years > 0,
-      eligible_fixed_horizon
+      eligible_fixed_horizon,
+      !is.na(mortality_horizon)
     ) %>%
     select(
       participant_id,
-      sample_date,
+      landmark_date,
       mortality_horizon,
       followup_years,
       death_time_years,
       split
     )
 
-  # One participant should have one row per MRI organ mortality clock file.
+  # One participant should contribute one MRI landmark record per organ file.
+  # If duplicates exist, retain the earliest valid imaging landmark.
   if (anyDuplicated(dat$participant_id) > 0) {
+    warning(
+      "Duplicated participant IDs found in ", prediction_file,
+      "; retaining the earliest landmark_date per participant."
+    )
     dat <- dat %>%
-      arrange(participant_id, sample_date) %>%
+      arrange(participant_id, landmark_date) %>%
       distinct(participant_id, .keep_all = TRUE)
   }
+
+  message(
+    "Mortality outcome source: ", prediction_file,
+    " | landmark field: ", landmark_column,
+    " | eligible N=", nrow(dat),
+    " | deaths within ", horizon_years, " years=",
+    sum(dat$mortality_horizon == 1L, na.rm = TRUE)
+  )
 
   dat
 }
