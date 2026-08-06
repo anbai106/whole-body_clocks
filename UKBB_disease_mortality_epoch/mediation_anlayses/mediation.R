@@ -53,7 +53,7 @@ covariate_file <- paste0(
 
 output_dir <- file.path(
   root_dir,
-  "SEM_molecular_disease_EPOCH_to_MRI_mortality_EPOCH"
+  "SEM_molecular_disease_EPOCH_to_MRI_mortality_EPOCH_testset"
 )
 
 dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
@@ -75,10 +75,10 @@ minimum_deaths <- 20
 #   "matched_only"= only mappings in organ_mapping below
 analysis_mode <- "all_pairs"
 
-# Full sample is requested. No train/test restriction is applied.
-# Set to TRUE only for a sensitivity analysis restricted to mortality-clock test
-# participants when the prediction file has a split column.
-restrict_mortality_clock_test_set <- FALSE
+# Primary analysis is restricted to the held-out mortality-clock test set.
+# Participants are retained only when split == "test" in each MRI mortality
+# prediction file. This reduces in-sample optimism in the mediator-outcome path.
+restrict_mortality_clock_test_set <- TRUE
 
 # Complete-case SEM is used within each exposure-mediator pair.
 # WLSMV handles the binary ordered mortality outcome.
@@ -333,6 +333,7 @@ prepare_mortality_outcome <- function(prediction_file, horizon_years, restrict_t
   message(
     "Mortality outcome source: ", prediction_file,
     " | landmark field: ", landmark_column,
+    " | analysis subset=", ifelse(restrict_test, "test", "full"),
     " | eligible N=", nrow(dat),
     " | deaths within ", horizon_years, " years=",
     sum(dat$mortality_horizon == 1L, na.rm = TRUE)
@@ -392,6 +393,11 @@ make_dummy_covariates <- function(data, categorical_vars) {
 
   data_without_factors <- data %>% select(-all_of(informative))
   bind_cols(data_without_factors, mm)
+}
+
+clean_message <- function(x) {
+  if (is.null(x) || length(x) == 0 || all(is.na(x))) return(NA_character_)
+  stringr::str_squish(stringr::str_replace_all(as.character(x), "[\r\n\t]+", " "))
 }
 
 extract_parameter <- function(pe, label) {
@@ -558,7 +564,8 @@ fit_one_sem <- function(
       ordered = "mortality_horizon",
       estimator = "WLSMV",
       parameterization = "theta",
-      fixed.x = FALSE,
+      fixed.x = TRUE,
+      conditional.x = TRUE,
       missing = "listwise",
       meanstructure = TRUE
     ),
@@ -854,7 +861,7 @@ for (i in seq_len(nrow(model_grid))) {
     N_deaths = result$deaths,
     N_survivors = result$survivors,
     status = result$status,
-    message = result$message
+    message = clean_message(result$message)
   )
   all_model_qc[[length(all_model_qc) + 1]] <- qc
 
