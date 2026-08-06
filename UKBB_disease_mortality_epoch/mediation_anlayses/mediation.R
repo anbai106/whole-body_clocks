@@ -58,6 +58,11 @@ output_dir <- file.path(
 
 dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 
+if (!file.exists(covariate_file)) {
+  stop("Covariate file not found: ", covariate_file)
+}
+
+
 # Fixed mortality horizon after MRI. Change to 10 for a 10-year sensitivity run.
 mortality_horizon_years <- 5
 
@@ -118,14 +123,36 @@ organ_mapping <- tribble(
 # ------------------------------------------------------------------------------
 
 read_epoch_table <- function(path) {
-  if (!file.exists(path) && file.exists(paste0(path, ".gz"))) {
-    path <- paste0(path, ".gz")
+  path <- path.expand(path)
+
+  if (file.exists(path)) {
+    if (grepl("\\.zip$", path, ignore.case = TRUE)) {
+      stop("ZIP archives are not supported directly: ", path)
+    }
+    message("Reading uncompressed EPOCH TSV: ", path)
+    return(read_tsv(
+      path,
+      show_col_types = FALSE,
+      progress = FALSE,
+      na = c("", "NA", "NaN", ".", "-9999")
+    ))
   }
-  if (!file.exists(path)) {
-    stop("EPOCH wide table not found: ", path)
+
+  gz_path <- paste0(path, ".gz")
+  if (file.exists(gz_path)) {
+    message("Uncompressed TSV not found; reading gzip-compressed EPOCH TSV: ", gz_path)
+    return(read_tsv(
+      gz_path,
+      show_col_types = FALSE,
+      progress = FALSE,
+      na = c("", "NA", "NaN", ".", "-9999")
+    ))
   }
-  message("Reading EPOCH table: ", path)
-  read_tsv(path, show_col_types = FALSE, progress = FALSE)
+
+  stop(
+    "EPOCH table not found. Checked:\n  ", path,
+    "\n  ", gz_path
+  )
 }
 
 extract_epoch_metadata <- function(column_name) {
@@ -497,6 +524,10 @@ fit_one_sem <- function(
 epoch <- read_epoch_table(epoch_wide_file) %>%
   mutate(participant_id = as.character(participant_id))
 
+if (anyDuplicated(epoch$participant_id) > 0) {
+  stop("EPOCH wide table contains duplicated participant_id values")
+}
+
 if (!"participant_id" %in% names(epoch)) {
   stop("The EPOCH wide table must contain participant_id")
 }
@@ -532,6 +563,9 @@ if (nrow(mediator_metadata) == 0) {
 
 message("Molecular disease EPOCH exposures: ", nrow(exposure_metadata))
 message("MRI mortality EPOCH mediators: ", nrow(mediator_metadata))
+message("EPOCH table dimensions: ", nrow(epoch), " participants x ", ncol(epoch), " columns")
+message("Exposure metadata columns: ", paste(names(exposure_metadata), collapse = ", "))
+message("Mediator metadata columns: ", paste(names(mediator_metadata), collapse = ", "))
 
 # ------------------------------------------------------------------------------
 # 4. Load covariates
@@ -557,25 +591,39 @@ if (length(missing_covariates) > 0) {
 covariates <- covariates %>%
   select(participant_id, any_of(requested_covariates))
 
+if (anyDuplicated(covariates$participant_id) > 0) {
+  warning("Covariate file contains duplicated participant_id values; keeping the first row per participant")
+  covariates <- covariates %>% distinct(participant_id, .keep_all = TRUE)
+}
+
 # ------------------------------------------------------------------------------
 # 5. Build the exposure-mediator model grid
 # ------------------------------------------------------------------------------
 
-model_grid <- crossing(
-  exposure_metadata %>%
-    rename(
-      exposure_column = column,
-      exposure_organ = organ,
-      exposure_modality = modality,
-      exposure_endpoint = endpoint
-    ),
-  mediator_metadata %>%
-    rename(
-      mediator_column = column,
-      mediator_organ = organ,
-      mediator_modality = modality,
-      mediator_endpoint = endpoint
-    )
+# Keep only uniquely named columns before constructing the Cartesian product.
+# Both metadata tables contain a column called `measure`; passing them directly to
+# tidyr::crossing() causes the duplicated-name error seen in the cluster log.
+exposure_grid_metadata <- exposure_metadata %>%
+  transmute(
+    exposure_column = column,
+    exposure_organ = organ,
+    exposure_modality = modality,
+    exposure_endpoint = endpoint,
+    exposure_measure = measure
+  )
+
+mediator_grid_metadata <- mediator_metadata %>%
+  transmute(
+    mediator_column = column,
+    mediator_organ = organ,
+    mediator_modality = modality,
+    mediator_endpoint = endpoint,
+    mediator_measure = measure
+  )
+
+model_grid <- tidyr::crossing(
+  exposure_grid_metadata,
+  mediator_grid_metadata
 )
 
 if (analysis_mode == "matched_only") {
@@ -586,6 +634,17 @@ if (analysis_mode == "matched_only") {
     )
 } else if (analysis_mode != "all_pairs") {
   stop("analysis_mode must be either all_pairs or matched_only")
+}
+
+if (anyDuplicated(names(model_grid)) > 0) {
+  stop(
+    "Internal error: duplicated model_grid columns: ",
+    paste(names(model_grid)[duplicated(names(model_grid))], collapse = ", ")
+  )
+}
+
+if (nrow(model_grid) == 0) {
+  stop("No exposure-mediator models remain after applying analysis_mode")
 }
 
 message("SEM models requested: ", nrow(model_grid))

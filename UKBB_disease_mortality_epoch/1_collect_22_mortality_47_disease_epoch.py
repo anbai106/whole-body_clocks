@@ -756,8 +756,7 @@ def main() -> int:
     combined.to_csv(
         wide_output,
         sep="\t",
-        index=False,
-        compression="gzip",
+        index=False
     )
 
     manifest = pd.DataFrame(
