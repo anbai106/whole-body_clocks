@@ -53,7 +53,7 @@ covariate_file <- paste0(
 
 output_dir <- file.path(
   root_dir,
-  "SEM_molecular_disease_EPOCH_to_MRI_mortality_EPOCH_testset"
+  "SEM_molecular_disease_EPOCH_to_MRI_mortality_EPOCH"
 )
 
 dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
@@ -78,7 +78,7 @@ analysis_mode <- "all_pairs"
 # Primary analysis is restricted to the held-out mortality-clock test set.
 # Participants are retained only when split == "test" in each MRI mortality
 # prediction file. This reduces in-sample optimism in the mediator-outcome path.
-restrict_mortality_clock_test_set <- TRUE
+restrict_mortality_clock_test_set <- FALSE
 
 # Complete-case SEM is used within each exposure-mediator pair.
 # WLSMV handles the binary ordered mortality outcome.
