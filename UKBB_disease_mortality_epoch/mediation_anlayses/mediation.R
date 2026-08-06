@@ -86,23 +86,12 @@ restrict_mortality_clock_test_set <- FALSE
 # Covariates measured at or near imaging visit 2.
 continuous_covariates <- c(
   "age_when_attended_assessment_centre_f21003_2_0",
-  "body_mass_index_bmi_f23104_2_0",
-  "genetic_principal_components_f22009_0_1",
-  "genetic_principal_components_f22009_0_2",
-  "genetic_principal_components_f22009_0_3",
-  "genetic_principal_components_f22009_0_4",
-  "genetic_principal_components_f22009_0_5",
-  "genetic_principal_components_f22009_0_6",
-  "genetic_principal_components_f22009_0_7",
-  "genetic_principal_components_f22009_0_8",
-  "genetic_principal_components_f22009_0_9",
-  "genetic_principal_components_f22009_0_10"
+  "body_mass_index_bmi_f23104_2_0"
 )
 
 categorical_covariates <- c(
   "sex_f31_0_0",
   "smoking_status_f20116_2_0",
-  "uk_biobank_assessment_centre_f54_2_0"
 )
 
 # Optional organ mapping for analysis_mode == "matched_only".
