@@ -345,21 +345,53 @@ make_dummy_covariates <- function(data, categorical_vars) {
   present <- intersect(categorical_vars, names(data))
   if (length(present) == 0) return(data)
 
-  for (v in present) {
-    data[[v]] <- factor(data[[v]])
+  # This function expects a complete-case data frame. model.matrix() can silently
+  # omit rows containing missing factor values, even when na.action = na.pass is
+  # supplied in some R/model.matrix configurations. We therefore check this
+  # explicitly and stop rather than allowing a row-count mismatch.
+  if (anyNA(data[present])) {
+    stop(
+      "Internal error: categorical covariates still contain missing values before dummy encoding: ",
+      paste(present[vapply(data[present], anyNA, logical(1))], collapse = ", ")
+    )
   }
 
-  mm <- model.matrix(
-    as.formula(paste("~", paste(present, collapse = " + "))),
-    data = data,
-    na.action = na.pass
-  )
+  # Remove categorical variables with fewer than two observed levels. They add no
+  # information and model.matrix() cannot apply contrasts to one-level factors.
+  informative <- present[
+    vapply(
+      data[present],
+      function(x) dplyr::n_distinct(as.character(x), na.rm = TRUE) >= 2,
+      logical(1)
+    )
+  ]
 
+  uninformative <- setdiff(present, informative)
+  if (length(uninformative) > 0) {
+    data <- data %>% select(-all_of(uninformative))
+  }
+
+  if (length(informative) == 0) return(data)
+
+  for (v in informative) {
+    data[[v]] <- droplevels(factor(data[[v]]))
+  }
+
+  dummy_formula <- reformulate(informative)
+  mm <- model.matrix(dummy_formula, data = data)
   mm <- as.data.frame(mm, check.names = TRUE)
   mm$`(Intercept)` <- NULL
 
-  data <- data %>% select(-all_of(present))
-  bind_cols(data, mm)
+  if (nrow(mm) != nrow(data)) {
+    stop(
+      "Internal error: model.matrix changed the number of rows from ",
+      nrow(data), " to ", nrow(mm),
+      ". Complete-case filtering must occur before dummy encoding."
+    )
+  }
+
+  data_without_factors <- data %>% select(-all_of(informative))
+  bind_cols(data_without_factors, mm)
 }
 
 extract_parameter <- function(pe, label) {
@@ -397,22 +429,59 @@ fit_one_sem <- function(
   model_data <- merged_data %>%
     transmute(
       participant_id,
-      exposure_raw = .data[[exposure_column]],
-      mediator_raw = .data[[mediator_column]],
-      mortality_horizon = mortality_horizon,
+      exposure_raw = safe_numeric(.data[[exposure_column]]),
+      mediator_raw = safe_numeric(.data[[mediator_column]]),
+      mortality_horizon = safe_numeric(mortality_horizon),
       across(any_of(c(continuous_covariates, categorical_covariates)))
     )
 
   present_continuous <- intersect(continuous_covariates, names(model_data))
   present_categorical <- intersect(categorical_covariates, names(model_data))
 
+  # Coerce continuous covariates to numeric and categorical covariates to clean
+  # character values before complete-case filtering. Empty strings and common
+  # UK Biobank missing-value codes are treated as missing for categorical fields.
+  model_data <- model_data %>%
+    mutate(
+      across(all_of(present_continuous), safe_numeric),
+      across(
+        all_of(present_categorical),
+        ~ {
+          value <- trimws(as.character(.x))
+          value[value %in% c("", "NA", "NaN", ".", "-9999")] <- NA_character_
+          value
+        }
+      )
+    )
+
+  # IMPORTANT: complete-case filtering must happen before model.matrix().
+  # Previously, model.matrix() silently dropped rows with missing categorical
+  # covariates, producing 7,493 dummy rows for 7,774 data rows and causing the
+  # bind_cols() size-mismatch error.
+  required_complete <- c(
+    "exposure_raw",
+    "mediator_raw",
+    "mortality_horizon",
+    present_continuous,
+    present_categorical
+  )
+
+  model_data <- model_data %>%
+    filter(if_all(all_of(required_complete), ~ !is.na(.x)))
+
+  # Standardize exposure and mediator within the actual complete-case analysis
+  # sample so coefficients correspond to a 1-SD difference in that model sample.
   model_data <- model_data %>%
     mutate(
       exposure = zscore_safe(exposure_raw),
-      mediator = zscore_safe(mediator_raw),
-      across(all_of(present_continuous), safe_numeric)
+      mediator = zscore_safe(mediator_raw)
     ) %>%
     select(-exposure_raw, -mediator_raw)
+
+  # Remove rows only if standardization failed because an exposure or mediator had
+  # zero variance in this particular complete-case sample.
+  model_data <- model_data %>%
+    filter(!is.na(exposure), !is.na(mediator))
 
   model_data <- make_dummy_covariates(model_data, present_categorical)
 
