@@ -91,7 +91,7 @@ continuous_covariates <- c(
 
 categorical_covariates <- c(
   "sex_f31_0_0",
-  "smoking_status_f20116_2_0",
+  "smoking_status_f20116_2_0"
 )
 
 # Optional organ mapping for analysis_mode == "matched_only".
