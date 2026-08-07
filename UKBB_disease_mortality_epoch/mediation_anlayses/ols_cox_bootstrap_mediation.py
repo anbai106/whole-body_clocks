@@ -1,127 +1,102 @@
 #!/usr/bin/env python3
 """
-EPOCH statistical mediation: OLS + Cox proportional hazards + bootstrap
-=====================================================================
+EPOCH single-model statistical mediation: OLS + Cox PH + bootstrap
+=================================================================
 
 METHOD PIPELINE
 ---------------
 Scientific question
-    For each baseline molecular disease EPOCH acceleration-z score, test whether
-    its association with later all-cause mortality is statistically mediated by
-    an MRI mortality EPOCH acceleration-z score measured at the imaging visit.
+    For one prespecified baseline molecular disease EPOCH acceleration-z score X
+    and one MRI mortality EPOCH acceleration-z score M, test whether the
+    association of X with later all-cause mortality is statistically mediated
+    through M. The full 45 x 7 grid contains 315 independent model jobs.
 
-Temporal ordering
-    X (exposure): baseline proteomics/metabolomics disease EPOCH acceleration-z
-        -> M (mediator): MRI mortality EPOCH acceleration-z at imaging visit 2
-        -> Y (outcome): observed all-cause mortality after the MRI landmark.
+SLURM parallelization
+    This script fits EXACTLY ONE mediation model per invocation. A 315-element
+    SLURM array passes --model-index 0..314, so all 315 exposure-mediator models
+    can run independently and concurrently. No cross-job aggregation is done in
+    this script. Each job writes one one-row TSV result. A separate collector can
+    merge the 315 files after the array is complete.
 
-Model grid
-    45 molecular disease EPOCH exposures x 7 MRI mortality EPOCH mediators =
-    315 exposure-mediator models when the current wide table contains the same
-    significant clocks used in the SEM analysis.
+Model indexing
+    Exposures are sorted by organ, modality, endpoint. MRI mortality mediators
+    are sorted by organ. The Cartesian product is created in exposure-major
+    order, giving deterministic zero-based model indices. With the current data
+    there are 45 exposures x 7 mediators = 315 models.
 
 Population
-    FULL available population is used by default. The optional --test-only flag
-    restricts each MRI mortality prediction file to rows with split == "test".
-    The split restriction is applied before construction of the mortality
-    landmark dataset. Models then use complete cases after merging exposure,
-    mediator, mortality follow-up, and covariates.
+    FULL available population is used by default. --test-only restricts the MRI
+    mortality prediction file to split == "test" before constructing follow-up.
 
-Landmark survival outcome
-    MRI imaging_date is preferred as time zero; sample_date is accepted as a
-    fallback for older files. A death is counted only when death_date is after
-    the MRI landmark and on/before admin_censor_date. Survival time is measured
-    from MRI landmark to death or administrative censoring. Unlike the previous
-    fixed-5-year WLSMV SEM, participants with shorter valid follow-up remain in
-    the Cox analysis and contribute their observed censored follow-up.
+Temporal ordering and survival outcome
+    X: baseline proteomics/metabolomics disease EPOCH acceleration-z
+      -> M: MRI mortality EPOCH acceleration-z at imaging visit 2
+      -> Y: observed all-cause mortality after the MRI landmark.
+    imaging_date is preferred as time zero; sample_date is accepted as fallback.
+    Death counts only when death_date > landmark and <= admin_censor_date.
+    Follow-up runs from MRI to death or administrative censoring. All valid
+    censored follow-up is retained; mortality is not collapsed to a 5-year binary.
 
-Covariate adjustment
-    Default covariates match the prior SEM as closely as possible:
-      - imaging-visit age
-      - imaging-visit BMI
-      - sex
-      - imaging-visit smoking status
-      - imaging-visit assessment centre
-      - genetic PCs 1-10
-    Categorical covariates are one-hot encoded. Zero-variance dummy variables are
-    removed within each exposure-mediator model. Complete-case filtering occurs
-    before model fitting.
+Covariates
+    Imaging-visit age, imaging-visit BMI, sex, imaging-visit smoking status,
+    imaging assessment centre, and genetic PCs 1-10 by default. Categorical
+    variables are one-hot encoded. Complete-case filtering occurs within the
+    selected X-M model. To reduce I/O when 315 jobs run simultaneously, each job
+    reads only the selected EPOCH pair and only requested covariate columns.
 
 Standardization
-    Exposure X and mediator M are re-standardized to mean 0 and SD 1 within the
-    final complete-case model sample. Thus a and b correspond to one-SD changes
-    in X and M within that model's analysis sample.
+    X and M are z-scored within the final complete-case analysis sample.
 
 Path a: OLS mediator model
     M = alpha + a*X + covariates + error
-    OLS is fitted with HC3 heteroskedasticity-robust standard errors.
+    OLS uses HC3 heteroskedasticity-robust standard errors.
 
-Paths b and c': Cox survival model
+Paths b and c': Cox proportional-hazards model
     h(t) = h0(t) * exp(b*M + c'*X + covariates)
-    b is the conditional MRI-mediator log-hazard coefficient and c' is the
-    direct exposure log-hazard coefficient conditional on M.
 
-Total effect c: Cox survival model
+Total exposure association c
     h(t) = h0(t) * exp(c*X + covariates)
 
 Indirect association
-    The statistical indirect association is approximated on the Cox log-hazard
-    scale by a*b. exp(a*b) is also reported as an indirect-association HR-like
-    transform. This product-of-coefficients quantity is a statistical mediation
-    approximation, NOT a formally identified causal natural indirect effect.
-    Cox coefficients are non-collapsible, so c need not equal c' + a*b.
-    Proportion mediated is intentionally NOT calculated.
+    indirect = a*b on the Cox log-hazard scale. exp(a*b) is reported only as an
+    HR-like transform. This is statistical mediation, not a formally identified
+    causal natural indirect effect. Cox non-collapsibility means c need not equal
+    c' + a*b. Proportion mediated is intentionally not calculated.
 
-Uncertainty for a*b
+Uncertainty
     1) Delta/Sobel approximation:
-         SE(a*b) = sqrt(b^2*SE(a)^2 + a^2*SE(b)^2)
-       This provides a continuous two-sided p-value suitable for stringent
-       multiple-testing correction.
+         SE(a*b) = sqrt(b^2 SE(a)^2 + a^2 SE(b)^2)
+       giving a continuous two-sided indirect p-value.
     2) Participant-level nonparametric bootstrap:
-       participants are resampled with replacement; the OLS a-path and the Cox
-       b/c' model are refitted; a*b is saved. Percentile 95% CIs and an empirical
-       two-sided bootstrap p-value are reported when enough replicates succeed.
-       Bootstrap p-values have finite resolution, so Bonferroni inference uses
-       the delta-method indirect p-value by default, while bootstrap CIs are used
-       as the main robustness/uncertainty check.
+       participants are resampled with replacement; OLS and the direct Cox model
+       are refitted; percentile 95% CI and empirical p-value are reported when
+       enough replicates succeed. Default = 1000 bootstrap replicates/model.
 
 Multiple testing
-    The primary multiplicity family is all requested exposure x mediator models
-    (normally 315). Bonferroni-adjusted p-values are reported for the indirect
-    delta-method p-values using m = number of requested models, including models
-    that later fail or are skipped. The script also reports the exact familywise
-    threshold alpha/m. BH-FDR values are saved as secondary information only.
+    The prespecified family is all 315 exposure-mediator models. Because m is
+    known before collection, each single-model file includes Bonferroni threshold
+    0.05/315 and Bonferroni-adjusted indirect p = min(raw p * 315, 1). Global BH
+    FDR is intentionally deferred to the later collection script.
 
-Diagnostics and safeguards
-    - minimum complete-case N and minimum number of deaths
-    - Cox convergence/error capture
-    - maximum VIF for X, M, and covariates
-    - Schoenfeld-residual proportional-hazards tests for X and M when available
-    - bootstrap success count and success fraction
-    - per-model QC/status table and captured warnings
-    - no proportion-mediated statistic
+Diagnostics
+    Each result records N, deaths, censored observations, events per Cox parameter,
+    max VIF, Schoenfeld PH-test p-values for X and M, Cox concordance, bootstrap
+    success fraction, warnings, and model status.
 
-Primary interpretation
-    Prioritize models that:
-      1) fit without Cox convergence problems,
-      2) have adequate numbers of deaths,
-      3) have Bonferroni-significant indirect delta p-values,
-      4) have bootstrap CIs excluding zero,
-      5) have acceptable VIF/PH diagnostics,
-      6) show compatible direction in the optional held-out test analysis.
+Output
+    Exactly one atomic TSV is written per array task under:
+      <output-dir>/single_model_results/model_<index>__<model_id>.tsv
+    Optional bootstrap samples can be saved with --save-bootstrap-samples.
 
 Required packages
     numpy pandas scipy statsmodels lifelines
 
-Typical full-population run
-    python run_epoch_ols_cox_bootstrap_mediation.py \
-      --bootstrap 1000
+Examples
+    Full population, model 0:
+      python ols_cox_bootstrap_mediation_single.py --model-index 0 --bootstrap 1000
 
-Held-out test-only sensitivity run
-    python run_epoch_ols_cox_bootstrap_mediation.py \
-      --test-only \
-      --bootstrap 1000 \
-      --output-dir /path/to/test_only_output
+    Held-out test only, model 0:
+      python ols_cox_bootstrap_mediation_single.py --model-index 0 --test-only --bootstrap 1000
 """
 
 from __future__ import annotations
@@ -155,8 +130,8 @@ DEFAULT_EPOCH_WIDE = DEFAULT_ROOT / "collected_significant_epoch_clocks" / "sign
 DEFAULT_COVARIATES = Path(
     "/cbica/home/wenju/Reproducibile_paper/PRS_UKBB/prediction/data/UKBB_fullsample_covariate.csv"
 )
-DEFAULT_OUTPUT_FULL = DEFAULT_ROOT / "mediation_OLS_Cox_bootstrap_full"
-DEFAULT_OUTPUT_TEST = DEFAULT_ROOT / "mediation_OLS_Cox_bootstrap_test"
+DEFAULT_OUTPUT_FULL = DEFAULT_ROOT / "mediation_OLS_Cox_bootstrap_full_single_models"
+DEFAULT_OUTPUT_TEST = DEFAULT_ROOT / "mediation_OLS_Cox_bootstrap_test_single_models"
 
 MRI_MORTALITY_ORGANS = ["adipose", "brain", "heart", "kidney", "liver", "pancreas", "spleen"]
 
@@ -313,6 +288,46 @@ def classify_epoch_columns(epoch: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFr
     return exposures, mediators
 
 
+
+def resolve_epoch_path(path: Path) -> Path:
+    path = Path(path).expanduser()
+    if path.exists():
+        return path
+    gz = Path(str(path) + ".gz")
+    if gz.exists():
+        return gz
+    raise FileNotFoundError(f"EPOCH table not found: {path} (or {gz})")
+
+
+def classify_epoch_header(path: Path) -> tuple[pd.DataFrame, pd.DataFrame, int]:
+    """Classify EPOCH variables from the header without loading the full 302k table."""
+    actual = resolve_epoch_path(path)
+    header = pd.read_csv(actual, sep="\t", nrows=0)
+    fake = pd.DataFrame(columns=header.columns)
+    exposures, mediators = classify_epoch_columns(fake)
+    return exposures, mediators, len(header.columns)
+
+
+def load_selected_epoch_pair(path: Path, exposure_column: str, mediator_column: str) -> pd.DataFrame:
+    """Load participant_id plus exactly one X and one M column for this array task."""
+    actual = resolve_epoch_path(path)
+    header = pd.read_csv(actual, sep="\t", nrows=0)
+    if "participant_id" in header.columns:
+        id_col = "participant_id"
+    elif "eid" in header.columns:
+        id_col = "eid"
+    else:
+        raise ValueError("EPOCH wide table has neither participant_id nor eid")
+    required = [id_col, exposure_column, mediator_column]
+    missing = [c for c in required if c not in header.columns]
+    if missing:
+        raise ValueError(f"Selected EPOCH columns missing from wide table: {missing}")
+    epoch = pd.read_csv(actual, sep="\t", usecols=required, low_memory=False)
+    epoch = standardize_id(epoch)
+    if epoch["participant_id"].duplicated().any():
+        raise ValueError("EPOCH wide table contains duplicated participant_id values.")
+    return epoch
+
 def find_prediction_file(root: Path, organ: str) -> Path:
     direct_dir = root / f"{organ}_mri_mortality_clock"
     if not direct_dir.is_dir():
@@ -388,7 +403,23 @@ def build_landmark_survival(prediction_file: Path, test_only: bool) -> pd.DataFr
 
 
 def prepare_covariates(path: Path, n_pcs: int) -> tuple[pd.DataFrame, list[str], list[str]]:
-    cov = standardize_id(pd.read_csv(path, low_memory=False))
+    """Load only the covariate columns needed by one mediation job.
+
+    This is intentionally usecols-based because 315 SLURM jobs may run at once.
+    Reading the full UK Biobank covariate table in every task would create
+    unnecessary memory and shared-filesystem pressure.
+    """
+    path = Path(path)
+    header = pd.read_csv(path, nrows=0)
+    id_source = "participant_id" if "participant_id" in header.columns else "eid" if "eid" in header.columns else None
+    if id_source is None:
+        raise ValueError(f"No participant_id or eid column found in covariate file: {path}")
+
+    requested_sources = list(CONTINUOUS_COVARIATE_MAP.values()) + list(CATEGORICAL_COVARIATE_MAP.values())
+    requested_sources += [f"genetic_principal_components_f22009_0_{pc}" for pc in range(1, n_pcs + 1)]
+    usecols = [id_source] + [c for c in requested_sources if c in header.columns]
+    cov = standardize_id(pd.read_csv(path, usecols=usecols, low_memory=False))
+
     rename_map: dict[str, str] = {}
     continuous: list[str] = []
     categorical: list[str] = []
@@ -418,6 +449,8 @@ def prepare_covariates(path: Path, n_pcs: int) -> tuple[pd.DataFrame, list[str],
         if source in cov.columns:
             new = f"PC{pc}"
             cov[new] = pd.to_numeric(cov[source], errors="coerce")
+            if source != new:
+                cov = cov.drop(columns=[source])
             continuous.append(new)
         else:
             warnings.warn(f"Requested PC not found and will be omitted: {source}")
@@ -800,17 +833,26 @@ def analyze_model(
     )
 
 
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run 45x7 EPOCH OLS+Cox statistical mediation with bootstrap uncertainty."
+        description="Fit exactly one EPOCH OLS+Cox bootstrap mediation model."
     )
     parser.add_argument("--epoch-wide", type=Path, default=DEFAULT_EPOCH_WIDE)
     parser.add_argument("--wholebody-root", type=Path, default=DEFAULT_ROOT)
     parser.add_argument("--covariates", type=Path, default=DEFAULT_COVARIATES)
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument(
+        "--model-index", type=int, required=True,
+        help="Zero-based global mediation-model index. Current 45x7 grid uses 0..314."
+    )
+    parser.add_argument(
+        "--expected-model-count", type=int, default=315,
+        help="Expected prespecified multiplicity family size; default 315."
+    )
+    parser.add_argument(
         "--test-only", action="store_true",
-        help="Restrict MRI mortality prediction files to split == test. Default is full population."
+        help="Restrict MRI mortality prediction file to split == test. Default is full population."
     )
     parser.add_argument("--bootstrap", type=int, default=1000)
     parser.add_argument("--min-bootstrap-success-fraction", type=float, default=0.80)
@@ -824,7 +866,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--save-bootstrap-samples", action="store_true",
-        help="Save per-model bootstrap a*b samples as compressed TSV files."
+        help="Save this model's bootstrap a*b samples as a compressed TSV."
     )
     return parser.parse_args()
 
@@ -835,175 +877,134 @@ def main() -> int:
         raise ValueError("--bootstrap must be >= 0")
     if not 0 < args.min_bootstrap_success_fraction <= 1:
         raise ValueError("--min-bootstrap-success-fraction must be in (0, 1].")
+    if args.model_index < 0:
+        raise ValueError("--model-index must be >= 0")
+    if args.expected_model_count < 1:
+        raise ValueError("--expected-model-count must be >= 1")
 
     subset_label = "test" if args.test_only else "full"
     output_dir = args.output_dir
     if output_dir is None:
         output_dir = DEFAULT_OUTPUT_TEST if args.test_only else DEFAULT_OUTPUT_FULL
     output_dir.mkdir(parents=True, exist_ok=True)
+    result_dir = output_dir / "single_model_results"
+    result_dir.mkdir(parents=True, exist_ok=True)
     bootstrap_dir = output_dir / "bootstrap_samples" if args.save_bootstrap_samples else None
 
-    print("=" * 80, flush=True)
-    print("EPOCH OLS + Cox + bootstrap statistical mediation", flush=True)
-    print(f"Analysis subset: {subset_label}", flush=True)
-    print(f"Bootstrap replicates per fitted model: {args.bootstrap}", flush=True)
-    print(f"Output directory: {output_dir}", flush=True)
-    print("=" * 80, flush=True)
-
-    epoch = standardize_id(read_table(args.epoch_wide))
-    if epoch["participant_id"].duplicated().any():
-        raise ValueError("EPOCH wide table contains duplicated participant_id values.")
-    exposures, mediators = classify_epoch_columns(epoch)
-    print(f"EPOCH table: {len(epoch)} participants x {epoch.shape[1]} columns", flush=True)
-    print(f"Molecular disease exposures: {len(exposures)}", flush=True)
-    print(f"MRI mortality mediators: {len(mediators)}", flush=True)
-
-    model_grid = exposures.assign(_key=1).merge(mediators.assign(_key=1), on="_key", suffixes=("_x", "_m")).drop(columns="_key")
+    exposures, mediators, epoch_ncols = classify_epoch_header(args.epoch_wide)
+    model_grid = (
+        exposures.assign(_key=1)
+        .merge(mediators.assign(_key=1), on="_key", suffixes=("_x", "_m"))
+        .drop(columns="_key")
+    )
     n_requested = len(model_grid)
-    print(f"Models requested: {n_requested}", flush=True)
+    if n_requested != args.expected_model_count:
+        raise ValueError(
+            f"Model grid contains {n_requested} models but --expected-model-count={args.expected_model_count}. "
+            "Do not run a 0-314 array unless these agree."
+        )
+    if args.model_index >= n_requested:
+        raise ValueError(f"--model-index {args.model_index} out of range; valid indices are 0..{n_requested-1}")
+
+    row = model_grid.iloc[args.model_index]
+    exp = pd.Series({
+        "column": row["column_x"], "organ": row["organ_x"],
+        "modality": row["modality_x"], "endpoint": row["endpoint_x"],
+        "measure": row["measure_x"],
+    })
+    med = pd.Series({
+        "column": row["column_m"], "organ": row["organ_m"],
+        "modality": row["modality_m"], "endpoint": row["endpoint_m"],
+        "measure": row["measure_m"],
+    })
+    exp_col = str(exp["column"])
+    med_col = str(med["column"])
+
+    print("=" * 88, flush=True)
+    print("EPOCH single-model OLS + Cox + bootstrap mediation", flush=True)
+    print(f"Model index: {args.model_index}/{n_requested - 1} (model number {args.model_index + 1}/{n_requested})", flush=True)
+    print(f"Exposure: {exp['organ']} {exp['modality']} {exp['endpoint']} | {exp_col}", flush=True)
+    print(f"Mediator: {med['organ']} MRI mortality EPOCH | {med_col}", flush=True)
+    print(f"Analysis subset: {subset_label}", flush=True)
+    print(f"Bootstrap replicates: {args.bootstrap}", flush=True)
+    print(f"EPOCH header columns: {epoch_ncols}; this job will read only participant_id + selected X + selected M", flush=True)
+    print(f"Output directory: {output_dir}", flush=True)
+    print("=" * 88, flush=True)
+
+    epoch_pair = load_selected_epoch_pair(args.epoch_wide, exp_col, med_col)
+    print(f"Loaded selected EPOCH pair for {len(epoch_pair)} participants", flush=True)
 
     cov, continuous_covariates, categorical_covariates = prepare_covariates(args.covariates, args.n_pcs)
     print(f"Continuous covariates: {continuous_covariates}", flush=True)
     print(f"Categorical covariates: {categorical_covariates}", flush=True)
 
-    mortality_by_mediator: dict[str, pd.DataFrame] = {}
-    for _, med in mediators.iterrows():
-        organ = str(med["organ"])
-        prediction = find_prediction_file(args.wholebody_root, organ)
-        mortality_by_mediator[str(med["column"])] = build_landmark_survival(prediction, args.test_only)
+    prediction = find_prediction_file(args.wholebody_root, str(med["organ"]))
+    outcome = build_landmark_survival(prediction, args.test_only)
 
-    results: list[dict] = []
-    model_counter = 0
-    for _, exp in exposures.iterrows():
-        for _, med in mediators.iterrows():
-            model_counter += 1
-            exp_col = str(exp["column"])
-            med_col = str(med["column"])
-            print(
-                f"[{model_counter}/{n_requested}] {exp['organ']} {exp['modality']} {exp['endpoint']} "
-                f"-> {med['organ']} MRI mortality EPOCH -> post-MRI mortality",
-                flush=True,
-            )
-            outcome = mortality_by_mediator[med_col]
-            merged = (
-                epoch[["participant_id", exp_col, med_col]]
-                .merge(outcome, on="participant_id", how="inner")
-                .merge(cov, on="participant_id", how="left")
-            )
-            result = analyze_model(
-                merged=merged,
-                exposure_meta=exp,
-                mediator_meta=med,
-                continuous_covariates=continuous_covariates,
-                categorical_covariates=categorical_covariates,
-                minimum_n=args.minimum_n,
-                minimum_deaths=args.minimum_deaths,
-                n_bootstrap=args.bootstrap,
-                min_bootstrap_success_fraction=args.min_bootstrap_success_fraction,
-                seed=args.seed + model_counter,
-                cox_penalizer=args.cox_penalizer,
-                subset_label=subset_label,
-                bootstrap_dir=bootstrap_dir,
-            )
-            results.append(asdict(result))
-            print(
-                f"    status={result.status} N={result.n} deaths={result.deaths} "
-                f"indirect_p={result.indirect_delta_p if np.isfinite(result.indirect_delta_p) else 'NA'} "
-                f"bootstrap={result.bootstrap_successes}/{result.bootstrap_requested}",
-                flush=True,
-            )
-
-    table = pd.DataFrame(results)
-
-    # Primary family-wise correction. Use the number of ALL requested models, not
-    # merely the models that happened to fit, so the declared family is explicit
-    # and conservative.
-    family_m = n_requested
-    bonf_threshold = 0.05 / family_m if family_m > 0 else np.nan
-    table["multiplicity_family_m"] = family_m
-    table["bonferroni_alpha_threshold"] = bonf_threshold
-    table["indirect_bonferroni_p"] = np.nan
-    table["indirect_bonferroni_significant"] = False
-    table["indirect_bh_fdr"] = np.nan
-
-    valid = table["indirect_delta_p"].notna() & np.isfinite(table["indirect_delta_p"])
-    if valid.any():
-        raw = table.loc[valid, "indirect_delta_p"].astype(float).to_numpy()
-        # Bonferroni uses the predeclared full family m=315 (or whatever the grid is).
-        bonf = np.minimum(raw * family_m, 1.0)
-        table.loc[valid, "indirect_bonferroni_p"] = bonf
-        table.loc[valid, "indirect_bonferroni_significant"] = raw < bonf_threshold
-        # BH-FDR is secondary and is calculated among estimable p-values.
-        _, qvals, _, _ = multipletests(raw, alpha=0.05, method="fdr_bh")
-        table.loc[valid, "indirect_bh_fdr"] = qvals
-
-    table["bootstrap_ci_excludes_zero"] = (
-        table["boot_ci_low"].notna()
-        & table["boot_ci_high"].notna()
-        & ((table["boot_ci_low"] > 0) | (table["boot_ci_high"] < 0))
+    merged = (
+        epoch_pair
+        .merge(outcome, on="participant_id", how="inner")
+        .merge(cov, on="participant_id", how="left")
     )
-    table["ph_exposure_violation_p_lt_0_05"] = table["ph_exposure_p"].notna() & table["ph_exposure_p"].lt(0.05)
-    table["ph_mediator_violation_p_lt_0_05"] = table["ph_mediator_p"].notna() & table["ph_mediator_p"].lt(0.05)
-    table["vif_gt_5"] = table["max_vif"].notna() & table["max_vif"].gt(5)
+    print(f"Merged pre-complete-case N: {len(merged)}", flush=True)
 
-    result_path = output_dir / "OLS_Cox_bootstrap_mediation_results.tsv"
-    qc_path = output_dir / "OLS_Cox_bootstrap_model_QC.tsv"
-    table.to_csv(result_path, sep="\t", index=False)
+    result = analyze_model(
+        merged=merged,
+        exposure_meta=exp,
+        mediator_meta=med,
+        continuous_covariates=continuous_covariates,
+        categorical_covariates=categorical_covariates,
+        minimum_n=args.minimum_n,
+        minimum_deaths=args.minimum_deaths,
+        n_bootstrap=args.bootstrap,
+        min_bootstrap_success_fraction=args.min_bootstrap_success_fraction,
+        seed=args.seed + args.model_index + 1,
+        cox_penalizer=args.cox_penalizer,
+        subset_label=subset_label,
+        bootstrap_dir=bootstrap_dir,
+    )
 
-    qc_columns = [
-        "model_id", "exposure_column", "exposure_organ", "exposure_modality", "exposure_endpoint",
-        "mediator_column", "mediator_organ", "analysis_subset", "status", "message", "n", "deaths",
-        "censored", "events_per_parameter_direct", "n_covariates", "bootstrap_requested",
-        "bootstrap_successes", "bootstrap_success_fraction", "max_vif", "ph_exposure_p", "ph_mediator_p",
-        "warnings",
-    ]
-    table[qc_columns].to_csv(qc_path, sep="\t", index=False)
-
-    exposures.to_csv(output_dir / "exposure_metadata.tsv", sep="\t", index=False)
-    mediators.to_csv(output_dir / "mediator_metadata.tsv", sep="\t", index=False)
-
-    settings = {
-        "analysis_subset": subset_label,
-        "epoch_wide": str(args.epoch_wide),
-        "wholebody_root": str(args.wholebody_root),
-        "covariates": str(args.covariates),
-        "output_dir": str(output_dir),
-        "bootstrap": args.bootstrap,
-        "minimum_n": args.minimum_n,
-        "minimum_deaths": args.minimum_deaths,
-        "n_pcs": args.n_pcs,
-        "cox_penalizer": args.cox_penalizer,
+    record = asdict(result)
+    family_m = args.expected_model_count
+    bonf_threshold = 0.05 / family_m
+    raw_p = record.get("indirect_delta_p", np.nan)
+    raw_p_finite = bool(np.isfinite(raw_p))
+    record.update({
+        "model_index": args.model_index,
+        "model_number": args.model_index + 1,
         "n_requested_models": n_requested,
-        "bonferroni_family_m": family_m,
+        "multiplicity_family_m": family_m,
         "bonferroni_alpha_threshold": bonf_threshold,
-        "continuous_covariates": continuous_covariates,
-        "categorical_covariates": categorical_covariates,
-        "indirect_inference": (
-            "a*b on Cox log-hazard scale; delta-method p-value is primary for Bonferroni; "
-            "participant bootstrap percentile CI is robustness inference."
+        "indirect_bonferroni_p": min(float(raw_p) * family_m, 1.0) if raw_p_finite else np.nan,
+        "indirect_bonferroni_significant": bool(raw_p_finite and float(raw_p) < bonf_threshold),
+        "bootstrap_ci_excludes_zero": bool(
+            np.isfinite(record.get("boot_ci_low", np.nan))
+            and np.isfinite(record.get("boot_ci_high", np.nan))
+            and (record["boot_ci_low"] > 0 or record["boot_ci_high"] < 0)
         ),
-        "causal_warning": (
-            "Statistical mediation only. This is not a formally identified causal natural indirect effect; "
-            "Cox non-collapsibility means total need not equal direct plus indirect."
+        "ph_exposure_violation_p_lt_0_05": bool(
+            np.isfinite(record.get("ph_exposure_p", np.nan)) and record["ph_exposure_p"] < 0.05
         ),
-    }
-    (output_dir / "analysis_settings.json").write_text(json.dumps(settings, indent=2) + "\n")
+        "ph_mediator_violation_p_lt_0_05": bool(
+            np.isfinite(record.get("ph_mediator_p", np.nan)) and record["ph_mediator_p"] < 0.05
+        ),
+        "vif_gt_5": bool(np.isfinite(record.get("max_vif", np.nan)) and record["max_vif"] > 5),
+    })
 
-    status_counts = table["status"].value_counts(dropna=False).to_dict()
-    n_ok = int((table["status"] == "ok").sum())
-    n_bonf = int(table["indirect_bonferroni_significant"].fillna(False).sum())
-    n_boot_ci = int(table["bootstrap_ci_excludes_zero"].fillna(False).sum())
+    table = pd.DataFrame([record])
+    safe_model = normalize_name(result.model_id)
+    result_path = result_dir / f"model_{args.model_index:03d}__{safe_model}.tsv"
+    tmp_path = result_dir / f".model_{args.model_index:03d}__{safe_model}.tsv.tmp"
+    table.to_csv(tmp_path, sep="\t", index=False)
+    tmp_path.replace(result_path)
 
-    print("\nCompleted.", flush=True)
-    print(f"Output directory: {output_dir}", flush=True)
-    print(f"Models requested: {n_requested}", flush=True)
-    print(f"Models fitted successfully: {n_ok}", flush=True)
-    print(f"Status counts: {status_counts}", flush=True)
-    print(f"Bonferroni threshold: {bonf_threshold:.8g} (0.05/{family_m})", flush=True)
-    print(f"Bonferroni-significant indirect effects: {n_bonf}", flush=True)
-    print(f"Bootstrap 95% CI excludes zero: {n_boot_ci}", flush=True)
-    print(f"Main results: {result_path}", flush=True)
-    print(f"QC results: {qc_path}", flush=True)
+    print("\nCompleted single mediation model.", flush=True)
+    print(f"Status: {result.status}", flush=True)
+    print(f"Final N: {result.n}; deaths: {result.deaths}; censored: {result.censored}", flush=True)
+    print(f"Indirect delta p: {result.indirect_delta_p if np.isfinite(result.indirect_delta_p) else 'NA'}", flush=True)
+    print(f"Bonferroni threshold: {bonf_threshold:.10g} (0.05/{family_m})", flush=True)
+    print(f"Bootstrap successes: {result.bootstrap_successes}/{result.bootstrap_requested}", flush=True)
+    print(f"Result file: {result_path}", flush=True)
     return 0
 
 
