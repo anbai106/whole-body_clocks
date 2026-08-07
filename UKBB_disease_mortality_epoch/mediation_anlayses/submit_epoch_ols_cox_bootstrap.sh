@@ -42,7 +42,7 @@
 #   SAVE_BOOTSTRAP=0
 # ==============================================================================
 
-SCRIPT=/cbica/home/wenju/Project/whole-body_clocks/UKBB_disease_mortality_epoch/mediation_anlayses/ols_cox_bootstrap_mediation_single.py
+SCRIPT=/cbica/home/wenju/Project/whole-body_clocks/UKBB_disease_mortality_epoch/mediation_anlayses/ols_cox_bootstrap_mediation.py
 ROOT_OUTPUT=/cbica/home/wenju/Reproducibile_paper/WholeBodyClock
 EXPECTED_MODELS=315
 
