@@ -38,11 +38,12 @@ Temporal ordering and survival outcome
     censored follow-up is retained; mortality is not collapsed to a 5-year binary.
 
 Covariates
-    Imaging-visit age, imaging-visit BMI, sex, imaging-visit smoking status,
-    imaging assessment centre, and genetic PCs 1-10 by default. Categorical
-    variables are one-hot encoded. Complete-case filtering occurs within the
-    selected X-M model. To reduce I/O when 315 jobs run simultaneously, each job
-    reads only the selected EPOCH pair and only requested covariate columns.
+    Imaging-visit age, imaging-visit BMI, and sex only. Genetic principal
+    components, imaging-visit smoking status, and imaging assessment centre are
+    intentionally excluded from this analysis. Sex is treated as categorical
+    and one-hot encoded when informative. Complete-case filtering occurs within
+    the selected X-M model. To reduce I/O when 315 jobs run simultaneously, each
+    job reads only the selected EPOCH pair and only these requested covariates.
 
 Standardization
     X and M are z-scored within the final complete-case analysis sample.
@@ -141,9 +142,12 @@ CONTINUOUS_COVARIATE_MAP = {
 }
 CATEGORICAL_COVARIATE_MAP = {
     "sex": "sex_f31_0_0",
-    "smoking_mri": "smoking_status_f20116_2_0",
-    "centre_mri": "uk_biobank_assessment_centre_f54_2_0",
 }
+
+# Intentionally excluded covariates:
+#   genetic_principal_components_f22009_0_*
+#   smoking_status_f20116_2_0
+#   uk_biobank_assessment_centre_f54_2_0
 
 
 @dataclass
@@ -402,7 +406,7 @@ def build_landmark_survival(prediction_file: Path, test_only: bool) -> pd.DataFr
     return dat[["participant_id", "landmark_date", "mortality_time_years", "mortality_event"]]
 
 
-def prepare_covariates(path: Path, n_pcs: int) -> tuple[pd.DataFrame, list[str], list[str]]:
+def prepare_covariates(path: Path) -> tuple[pd.DataFrame, list[str], list[str]]:
     """Load only the covariate columns needed by one mediation job.
 
     This is intentionally usecols-based because 315 SLURM jobs may run at once.
@@ -416,7 +420,6 @@ def prepare_covariates(path: Path, n_pcs: int) -> tuple[pd.DataFrame, list[str],
         raise ValueError(f"No participant_id or eid column found in covariate file: {path}")
 
     requested_sources = list(CONTINUOUS_COVARIATE_MAP.values()) + list(CATEGORICAL_COVARIATE_MAP.values())
-    requested_sources += [f"genetic_principal_components_f22009_0_{pc}" for pc in range(1, n_pcs + 1)]
     usecols = [id_source] + [c for c in requested_sources if c in header.columns]
     cov = standardize_id(pd.read_csv(path, usecols=usecols, low_memory=False))
 
@@ -444,16 +447,6 @@ def prepare_covariates(path: Path, n_pcs: int) -> tuple[pd.DataFrame, list[str],
         text = cov[new].astype("string").str.strip()
         cov[new] = text.replace({"": pd.NA, "NA": pd.NA, "NaN": pd.NA, ".": pd.NA, "-9999": pd.NA})
 
-    for pc in range(1, n_pcs + 1):
-        source = f"genetic_principal_components_f22009_0_{pc}"
-        if source in cov.columns:
-            new = f"PC{pc}"
-            cov[new] = pd.to_numeric(cov[source], errors="coerce")
-            if source != new:
-                cov = cov.drop(columns=[source])
-            continuous.append(new)
-        else:
-            warnings.warn(f"Requested PC not found and will be omitted: {source}")
 
     keep = ["participant_id"] + continuous + categorical
     cov = cov[keep].copy()
@@ -859,7 +852,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=20260806)
     parser.add_argument("--minimum-n", type=int, default=500)
     parser.add_argument("--minimum-deaths", type=int, default=20)
-    parser.add_argument("--n-pcs", type=int, default=10)
     parser.add_argument(
         "--cox-penalizer", type=float, default=0.0,
         help="L2 penalizer for Cox models. Default 0.0 (unpenalized primary analysis)."
@@ -934,7 +926,7 @@ def main() -> int:
     epoch_pair = load_selected_epoch_pair(args.epoch_wide, exp_col, med_col)
     print(f"Loaded selected EPOCH pair for {len(epoch_pair)} participants", flush=True)
 
-    cov, continuous_covariates, categorical_covariates = prepare_covariates(args.covariates, args.n_pcs)
+    cov, continuous_covariates, categorical_covariates = prepare_covariates(args.covariates)
     print(f"Continuous covariates: {continuous_covariates}", flush=True)
     print(f"Categorical covariates: {categorical_covariates}", flush=True)
 
