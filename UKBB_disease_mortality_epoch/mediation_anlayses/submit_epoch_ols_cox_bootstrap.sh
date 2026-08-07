@@ -37,7 +37,6 @@
 #   BOOTSTRAP=1000
 #   MINIMUM_N=500
 #   MINIMUM_DEATHS=20
-#   N_PCS=10
 #   COX_PENALIZER=0.0
 #   SAVE_BOOTSTRAP=0
 # ==============================================================================
@@ -49,7 +48,6 @@ EXPECTED_MODELS=315
 BOOTSTRAP=${BOOTSTRAP:-1000}
 MINIMUM_N=${MINIMUM_N:-500}
 MINIMUM_DEATHS=${MINIMUM_DEATHS:-20}
-N_PCS=${N_PCS:-10}
 COX_PENALIZER=${COX_PENALIZER:-0.0}
 ANALYSIS_MODE=${ANALYSIS_MODE:-full}
 SAVE_BOOTSTRAP=${SAVE_BOOTSTRAP:-0}
@@ -148,7 +146,6 @@ if [[ "$ANALYSIS_MODE" == "test" ]]; then
             --bootstrap "$BOOTSTRAP" \
             --minimum-n "$MINIMUM_N" \
             --minimum-deaths "$MINIMUM_DEATHS" \
-            --n-pcs "$N_PCS" \
             --cox-penalizer "$COX_PENALIZER"
     else
         python -u "$SCRIPT" \
@@ -159,7 +156,6 @@ if [[ "$ANALYSIS_MODE" == "test" ]]; then
             --bootstrap "$BOOTSTRAP" \
             --minimum-n "$MINIMUM_N" \
             --minimum-deaths "$MINIMUM_DEATHS" \
-            --n-pcs "$N_PCS" \
             --cox-penalizer "$COX_PENALIZER"
     fi
 else
@@ -172,7 +168,6 @@ else
             --bootstrap "$BOOTSTRAP" \
             --minimum-n "$MINIMUM_N" \
             --minimum-deaths "$MINIMUM_DEATHS" \
-            --n-pcs "$N_PCS" \
             --cox-penalizer "$COX_PENALIZER"
     else
         python -u "$SCRIPT" \
@@ -182,7 +177,6 @@ else
             --bootstrap "$BOOTSTRAP" \
             --minimum-n "$MINIMUM_N" \
             --minimum-deaths "$MINIMUM_DEATHS" \
-            --n-pcs "$N_PCS" \
             --cox-penalizer "$COX_PENALIZER"
     fi
 fi
