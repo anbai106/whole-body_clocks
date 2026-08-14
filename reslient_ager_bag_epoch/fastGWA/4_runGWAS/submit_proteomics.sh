@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --partition=all
+#SBATCH --partition=bioinformatics
 #SBATCH --job-name=ArrayJob
 #SBATCH --time=0-10:59:00
 #SBATCH --mem-per-cpu=24G
