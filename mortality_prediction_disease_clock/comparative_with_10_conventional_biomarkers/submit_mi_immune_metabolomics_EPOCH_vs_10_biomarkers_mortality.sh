@@ -2,7 +2,7 @@
 #SBATCH --partition=all
 #SBATCH --job-name=mi_immune_EPOCH_vs_10bio
 #SBATCH --mem-per-cpu=24G
-#SBATCH --time=05:00:00
+#SBATCH --time=12:00:00
 #SBATCH --output=/cbica/home/wenju/output/mi_immune_EPOCH_vs_10bio_%j.out
 #SBATCH --error=/cbica/home/wenju/output/mi_immune_EPOCH_vs_10bio_%j.err
 
