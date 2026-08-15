@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --partition=all
+#SBATCH --partition=bioinformatics
 #SBATCH --job-name=CRA_CUA_DTI
 #SBATCH --array=0-47
 #SBATCH --mem-per-cpu=12G
@@ -114,7 +114,7 @@ COV_TSV="/cbica/home/wenju/Reproducibile_paper/PRS_UKBB/prediction/data/UKBB_ful
 
 OUTPUT_DIR="/cbica/home/wenju/Reproducibile_paper/WholeBodyClock/mortality_clock/BWAS/Brain_proteomics_EPOCH_BAG_resilience/CRA_vs_CUA/DTI"
 
-R_SCRIPT="/cbica/home/wenju/Project/whole-body_clocks/reslient_ager_bag_epoch/BWAS/fit_CRA_vs_CUA_logistic.R"
+R_SCRIPT="/cbica/home/wenju/Project/whole-body_clocks/reslient_ager_bag_epoch/BWAS/fit_logistic.R"
 
 mkdir -p "${OUTPUT_DIR}"
 mkdir -p "/cbica/home/wenju/output"
