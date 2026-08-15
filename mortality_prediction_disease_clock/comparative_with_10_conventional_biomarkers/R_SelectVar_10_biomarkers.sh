@@ -2,9 +2,7 @@
 #SBATCH --partition=bioinformatics
 #SBATCH --job-name=select
 #SBATCH --mem-per-cpu=24G
-#SBATCH --cpus-per-task=1
 #SBATCH --time=12:00:00
-#SBATCH --array=0-46
 #SBATCH --output=/cbica/home/wenju/output/select_%A_%a.out
 #SBATCH --error=/cbica/home/wenju/output/select_%A_%a.err
 
