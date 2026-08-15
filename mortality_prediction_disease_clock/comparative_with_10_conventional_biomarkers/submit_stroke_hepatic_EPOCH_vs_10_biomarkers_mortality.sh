@@ -2,7 +2,7 @@
 #SBATCH --partition=all
 #SBATCH --job-name=stroke_hepatic_EPOCH_vs_10bio
 #SBATCH --mem-per-cpu=24G
-#SBATCH --time=00:05:00
+#SBATCH --time=06:05:00
 #SBATCH --output=/cbica/home/wenju/output/stroke_hepatic_EPOCH_vs_10bio_%j.out
 #SBATCH --error=/cbica/home/wenju/output/stroke_hepatic_EPOCH_vs_10bio_%j.err
 
