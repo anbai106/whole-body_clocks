@@ -5,10 +5,47 @@
 #
 # Primary intended analysis:
 #   Candidate resilient agers (CRA) versus concordant unfavorable agers (CUA)
-#   using the brain-proteomics BAG-EPOCH discordance phenotypes.
+#   using brain-proteomics BAG-EPOCH discordance phenotypes.
+#
+# IMPORTANT FIX
+# -------------
+# The participant-level resilience TSV stores:
+#
+#   CRA_p20 / CUA_p20
+#       logical indicator columns (TRUE/FALSE)
+#
+# and:
+#
+#   aging_phenotype_p20
+#       "Candidate_resilient_ager"
+#       "Concordant_unfavorable_ager"
+#       "Concordant_favorable_ager"
+#       "Latent_vulnerability_ager"
+#       "Other"
+#
+# Therefore, the short labels "CRA" and "CUA" are NOT literal values of
+# aging_phenotype_p20.
+#
+# This script now handles that automatically:
+#
+#   1) Preferred:
+#      If phenotype_col = aging_phenotype_p20 and CRA_p20 / CUA_p20 exist,
+#      it constructs the binary phenotype directly from those indicator columns:
+#
+#          CRA_p20 == TRUE -> case_binary = 1
+#          CUA_p20 == TRUE -> case_binary = 0
+#
+#      Everyone else is excluded.
+#
+#   2) Fallback:
+#      If the indicator columns are unavailable, it recognizes both abbreviated
+#      and full phenotype labels, e.g.
+#
+#          CRA <-> Candidate_resilient_ager
+#          CUA <-> Concordant_unfavorable_ager
 #
 # Model:
-#   CRA_case ~ IDP_z + covariates
+#   case_binary ~ IDP_z + covariates
 #
 # Coding:
 #   CRA = 1
@@ -19,29 +56,19 @@
 #       = higher IDP is associated with greater odds of being CRA
 #
 #   beta_IDP < 0 / OR < 1
-#       = higher IDP is associated with greater odds of being the comparator
+#       = higher IDP is associated with greater odds of being CUA
 #
-# IMPORTANT:
-# This is an association model, not a causal model. "Positive beta" should be
-# interpreted as CRA-associated rather than as proof that the imaging feature
-# causally promotes resilience.
-#
-# Why CUA is the primary comparator:
-#   CRA: high BAG + low EPOCH|BAG residual
-#   CUA: high BAG + high EPOCH|BAG residual
-#
-# Both groups are in the high-BAG tail, so CRA vs CUA contrasts lower versus
-# higher event-proximal vulnerability among people with similarly advanced
-# generalized biological aging.
+# This is an association analysis; positive beta should be interpreted as
+# CRA-associated, not as proof that the imaging feature causally promotes CRA.
 #
 # Generalizability:
 #   The script is imaging-modality agnostic. The IDP can come from DTI,
 #   T1 gray-matter, resting/task fMRI, or another brain-imaging table.
 #
-#   Covariates can come from three places:
-#     1) phenotype TSV      -- phenotype_covariates
-#     2) general covariate file -- covariates
-#     3) imaging/IDP TSV    -- idp_covariates
+# Covariates can come from:
+#   1) phenotype TSV           -- phenotype_covariates
+#   2) general covariate file  -- covariates
+#   3) imaging/IDP TSV         -- idp_covariates
 #
 # This lets later T1 analyses add intracranial-volume/head-size covariates,
 # and fMRI analyses add motion/quality covariates without modifying this R code.
@@ -119,11 +146,13 @@ control_label <- if (length(args) >= 8 && nzchar(args[[8]])) {
 
 covariates_csv <- if (length(args) >= 9) args[[9]] else ""
 factor_covariates_csv <- if (length(args) >= 10) args[[10]] else ""
+
 phenotype_covariates_csv <- if (length(args) >= 11) {
   args[[11]]
 } else {
   "age_at_imaging,sex,Brain_ProtBAG_z"
 }
+
 idp_covariates_csv <- if (length(args) >= 12) args[[12]] else ""
 
 outlier_sd <- if (length(args) >= 13 && nzchar(args[[13]])) {
@@ -161,6 +190,7 @@ if (is.na(min_per_group) || min_per_group < 1) {
 # -----------------------------------------------------------------------------
 
 cluster_lib <- "/cbica/home/wenju/R/x86_64-pc-linux-gnu-library/4.2.2"
+
 if (dir.exists(cluster_lib)) {
   .libPaths(c(cluster_lib, .libPaths()))
 }
@@ -195,7 +225,7 @@ safe_file_token <- function(x) {
 
 standardize_participant_id <- function(dt, source_name) {
   if ("participant_id" %in% names(dt)) {
-    # already correct
+    # already standardized
   } else if ("eid" %in% names(dt)) {
     setnames(dt, "eid", "participant_id")
   } else {
@@ -210,7 +240,10 @@ standardize_participant_id <- function(dt, source_name) {
 }
 
 check_unique_ids <- function(dt, source_name) {
-  dup <- dt[duplicated(participant_id) | duplicated(participant_id, fromLast = TRUE)]
+  dup <- dt[
+    duplicated(participant_id) |
+      duplicated(participant_id, fromLast = TRUE)
+  ]
 
   if (nrow(dup) > 0) {
     stop(
@@ -237,6 +270,106 @@ check_columns <- function(dt, cols, source_name) {
       paste(missing_cols, collapse = ", ")
     )
   }
+}
+
+normalize_label <- function(x) {
+  x <- as.character(x)
+  x <- trimws(x)
+  x <- tolower(x)
+  x <- gsub("[[:space:]-]+", "_", x)
+  x <- gsub("_+", "_", x)
+  x
+}
+
+parse_bool <- function(x) {
+  if (is.logical(x)) {
+    return(x)
+  }
+
+  if (is.numeric(x) || is.integer(x)) {
+    out <- rep(NA, length(x))
+    out[!is.na(x) & x == 1] <- TRUE
+    out[!is.na(x) & x == 0] <- FALSE
+    return(as.logical(out))
+  }
+
+  z <- tolower(trimws(as.character(x)))
+
+  out <- rep(NA, length(z))
+
+  out[z %in% c("true", "t", "1", "yes", "y")] <- TRUE
+  out[z %in% c("false", "f", "0", "no", "n")] <- FALSE
+
+  as.logical(out)
+}
+
+extract_threshold_tag <- function(phenotype_col) {
+  hit <- regmatches(
+    phenotype_col,
+    regexpr("p[0-9]+$", phenotype_col, perl = TRUE)
+  )
+
+  if (length(hit) == 0 || !nzchar(hit)) {
+    return(NA_character_)
+  }
+
+  hit
+}
+
+canonical_aliases <- function(label) {
+
+  z <- normalize_label(label)
+
+  if (z == "cra") {
+    return(
+      c(
+        "cra",
+        "candidate_resilient_ager",
+        "candidate_resilient_agers"
+      )
+    )
+  }
+
+  if (z == "cua") {
+    return(
+      c(
+        "cua",
+        "concordant_unfavorable_ager",
+        "concordant_unfavourable_ager",
+        "concordant_unfavorable_agers",
+        "concordant_unfavourable_agers"
+      )
+    )
+  }
+
+  if (z == "cfa") {
+    return(
+      c(
+        "cfa",
+        "concordant_favorable_ager",
+        "concordant_favourable_ager",
+        "concordant_favorable_agers",
+        "concordant_favourable_agers"
+      )
+    )
+  }
+
+  if (z == "lva") {
+    return(
+      c(
+        "lva",
+        "latent_vulnerability_ager",
+        "latent_vulnerability_agers"
+      )
+    )
+  }
+
+  unique(
+    c(
+      z,
+      normalize_label(label)
+    )
+  )
 }
 
 capture_glm <- function(formula, data) {
@@ -272,7 +405,6 @@ factor_covariates <- split_csv(factor_covariates_csv)
 phenotype_covariates <- split_csv(phenotype_covariates_csv)
 idp_covariates <- split_csv(idp_covariates_csv)
 
-# Prevent accidental duplication across sources.
 if (length(intersect(covariates, phenotype_covariates)) > 0) {
   stop(
     "The same covariate appears in covariates_csv and ",
@@ -372,53 +504,231 @@ check_columns(
   "phenotype_tsv"
 )
 
-phenotype <- phenotype[
-  ,
-  c(
-    "participant_id",
-    phenotype_col,
-    phenotype_covariates
-  ),
-  with = FALSE
-]
+# -----------------------------------------------------------------------------
+# Construct CRA-vs-CUA (or other requested) binary phenotype
+# -----------------------------------------------------------------------------
 
-# Keep only the two groups being compared.
-phenotype[, phenotype_label := as.character(get(phenotype_col))]
+threshold_tag <- extract_threshold_tag(
+  phenotype_col
+)
 
-phenotype <- phenotype[
-  phenotype_label %in% c(case_label, control_label)
-]
+case_indicator_col <- NA_character_
+control_indicator_col <- NA_character_
 
-if (nrow(phenotype) == 0) {
-  stop(
-    "No participants found with ",
-    phenotype_col,
-    " equal to ",
+if (!is.na(threshold_tag)) {
+
+  candidate_case_indicator <- paste0(
     case_label,
-    " or ",
+    "_",
+    threshold_tag
+  )
+
+  candidate_control_indicator <- paste0(
     control_label,
-    "."
+    "_",
+    threshold_tag
+  )
+
+  if (
+    candidate_case_indicator %in% names(phenotype) &&
+      candidate_control_indicator %in% names(phenotype)
+  ) {
+    case_indicator_col <- candidate_case_indicator
+    control_indicator_col <- candidate_control_indicator
+  }
+}
+
+phenotype_creation_method <- NA_character_
+
+if (
+  !is.na(case_indicator_col) &&
+    !is.na(control_indicator_col)
+) {
+
+  # ---------------------------------------------------------------------------
+  # Preferred method: use explicit CRA_p20 / CUA_p20 indicator columns.
+  # ---------------------------------------------------------------------------
+
+  message("")
+  message("Creating binary phenotype from indicator columns:")
+  message("  Case indicator:    ", case_indicator_col)
+  message("  Control indicator: ", control_indicator_col)
+
+  phenotype[
+    ,
+    case_flag_internal := parse_bool(
+      get(case_indicator_col)
+    )
+  ]
+
+  phenotype[
+    ,
+    control_flag_internal := parse_bool(
+      get(control_indicator_col)
+    )
+  ]
+
+  # Participants must belong to exactly one of the two groups.
+  phenotype[
+    ,
+    case_binary := fcase(
+      case_flag_internal %in% TRUE &
+        !(control_flag_internal %in% TRUE),
+      1L,
+
+      control_flag_internal %in% TRUE &
+        !(case_flag_internal %in% TRUE),
+      0L,
+
+      default = NA_integer_
+    )
+  ]
+
+  phenotype_creation_method <- paste0(
+    "indicator_columns:",
+    case_indicator_col,
+    "_vs_",
+    control_indicator_col
+  )
+
+} else {
+
+  # ---------------------------------------------------------------------------
+  # Fallback method: map full phenotype names in aging_phenotype_pXX.
+  # ---------------------------------------------------------------------------
+
+  message("")
+  message(
+    "Indicator columns were not found for the requested comparison; ",
+    "falling back to phenotype-label mapping."
+  )
+
+  case_aliases <- canonical_aliases(
+    case_label
+  )
+
+  control_aliases <- canonical_aliases(
+    control_label
+  )
+
+  phenotype[
+    ,
+    phenotype_label_normalized := normalize_label(
+      get(phenotype_col)
+    )
+  ]
+
+  phenotype[
+    ,
+    case_binary := fcase(
+      phenotype_label_normalized %in% case_aliases,
+      1L,
+
+      phenotype_label_normalized %in% control_aliases,
+      0L,
+
+      default = NA_integer_
+    )
+  ]
+
+  phenotype_creation_method <- paste0(
+    "label_mapping_from:",
+    phenotype_col
   )
 }
 
-phenotype[
-  ,
-  CRA_case := fifelse(
-    phenotype_label == case_label,
-    1L,
-    0L
-  )
+# Keep only requested case/control groups.
+phenotype <- phenotype[
+  !is.na(case_binary)
 ]
 
-n_case_phenotype <- phenotype[CRA_case == 1L, .N]
-n_control_phenotype <- phenotype[CRA_case == 0L, .N]
+if (nrow(phenotype) == 0) {
+
+  observed_labels <- sort(
+    unique(
+      as.character(
+        fread(
+          phenotype_tsv,
+          select = phenotype_col,
+          showProgress = FALSE
+        )[[phenotype_col]]
+      )
+    )
+  )
+
+  stop(
+    paste0(
+      "No participants could be assigned to the requested comparison.\n\n",
+      "Requested:\n",
+      "  case = ", case_label, "\n",
+      "  control = ", control_label, "\n",
+      "  phenotype column = ", phenotype_col, "\n\n",
+      "Observed values in ", phenotype_col, " include:\n  ",
+      paste(
+        head(observed_labels, 20),
+        collapse = "\n  "
+      ),
+      "\n\n",
+      "Expected for your resilience TSV:\n",
+      "  CRA = Candidate_resilient_ager or CRA_", threshold_tag, "\n",
+      "  CUA = Concordant_unfavorable_ager or CUA_", threshold_tag, "\n"
+    )
+  )
+}
+
+n_case_phenotype <- phenotype[
+  case_binary == 1L,
+  .N
+]
+
+n_control_phenotype <- phenotype[
+  case_binary == 0L,
+  .N
+]
+
+if (
+  n_case_phenotype == 0 ||
+    n_control_phenotype == 0
+) {
+  stop(
+    "Binary phenotype construction produced an empty group: ",
+    case_label,
+    "=",
+    n_case_phenotype,
+    "; ",
+    control_label,
+    "=",
+    n_control_phenotype
+  )
+}
 
 message("")
-message("Phenotype comparison:")
+message("Phenotype comparison created successfully:")
 message("  Case    = ", case_label, " -> 1")
 message("  Control = ", control_label, " -> 0")
+message("  Method  = ", phenotype_creation_method)
 message("  N case in phenotype file: ", n_case_phenotype)
 message("  N control in phenotype file: ", n_control_phenotype)
+
+# Retain only required phenotype columns after outcome creation.
+phenotype_keep <- unique(
+  c(
+    "participant_id",
+    "case_binary",
+    phenotype_col,
+    phenotype_covariates
+  )
+)
+
+phenotype_keep <- phenotype_keep[
+  phenotype_keep %in% names(phenotype)
+]
+
+phenotype <- phenotype[
+  ,
+  phenotype_keep,
+  with = FALSE
+]
 
 # -----------------------------------------------------------------------------
 # Read imaging IDP data
@@ -519,7 +829,6 @@ if (length(covariates) > 0) {
 } else {
 
   cov_data <- NULL
-
 }
 
 # -----------------------------------------------------------------------------
@@ -546,9 +855,24 @@ if (!is.null(cov_data)) {
 
 n_after_merge <- nrow(df)
 
+if (n_after_merge == 0) {
+  stop(
+    "No overlapping participants after merging phenotype and imaging data."
+  )
+}
+
 # IDP must be numeric.
-df[, IDP_raw := suppressWarnings(as.numeric(IDP_raw))]
-df[!is.finite(IDP_raw), IDP_raw := NA_real_]
+df[
+  ,
+  IDP_raw := suppressWarnings(
+    as.numeric(IDP_raw)
+  )
+]
+
+df[
+  !is.finite(IDP_raw),
+  IDP_raw := NA_real_
+]
 
 # Convert requested categorical covariates to factors.
 for (v in factor_covariates) {
@@ -557,10 +881,16 @@ for (v in factor_covariates) {
 
 model_variables <- unique(
   c(
-    "CRA_case",
+    "case_binary",
     "IDP_raw",
     all_model_covariates
   )
+)
+
+check_columns(
+  df,
+  model_variables,
+  "merged analysis table"
 )
 
 # Complete-case model sample.
@@ -576,7 +906,9 @@ df_model <- df[
   complete_idx
 ]
 
-n_complete_before_outlier <- nrow(df_model)
+n_complete_before_outlier <- nrow(
+  df_model
+)
 
 if (n_complete_before_outlier < min_total_n) {
   stop(
@@ -602,21 +934,31 @@ idp_sd_pre <- sd(
 )
 
 if (!is.finite(idp_sd_pre) || idp_sd_pre <= 0) {
-  stop("IDP has zero or invalid SD in the complete-case sample.")
+  stop(
+    "IDP has zero or invalid SD in the complete-case sample."
+  )
 }
 
 lower_limit <- idp_mean_pre - outlier_sd * idp_sd_pre
 upper_limit <- idp_mean_pre + outlier_sd * idp_sd_pre
 
-n_before_outlier <- nrow(df_model)
+n_before_outlier <- nrow(
+  df_model
+)
 
 df_model <- df_model[
   IDP_raw >= lower_limit &
     IDP_raw <= upper_limit
 ]
 
-n_after_outlier <- nrow(df_model)
-n_outliers_removed <- n_before_outlier - n_after_outlier
+n_after_outlier <- nrow(
+  df_model
+)
+
+n_outliers_removed <- (
+  n_before_outlier -
+    n_after_outlier
+)
 
 if (n_after_outlier < min_total_n) {
   stop(
@@ -627,7 +969,7 @@ if (n_after_outlier < min_total_n) {
   )
 }
 
-# Standardize after outlier filtering.
+# Standardize IDP after outlier filtering.
 idp_mean_final <- mean(
   df_model$IDP_raw,
   na.rm = TRUE
@@ -639,20 +981,33 @@ idp_sd_final <- sd(
 )
 
 if (!is.finite(idp_sd_final) || idp_sd_final <= 0) {
-  stop("IDP has zero or invalid SD after outlier filtering.")
+  stop(
+    "IDP has zero or invalid SD after outlier filtering."
+  )
 }
 
 df_model[
   ,
   IDP_z := (
-    IDP_raw - idp_mean_final
+    IDP_raw -
+      idp_mean_final
   ) / idp_sd_final
 ]
 
-n_case <- df_model[CRA_case == 1L, .N]
-n_control <- df_model[CRA_case == 0L, .N]
+n_case <- df_model[
+  case_binary == 1L,
+  .N
+]
 
-if (n_case < min_per_group || n_control < min_per_group) {
+n_control <- df_model[
+  case_binary == 0L,
+  .N
+]
+
+if (
+  n_case < min_per_group ||
+    n_control < min_per_group
+) {
   stop(
     "Too few participants in one comparison group after QC. ",
     case_label,
@@ -681,7 +1036,7 @@ rhs_terms <- c(
 )
 
 formula_text <- paste0(
-  "CRA_case ~ ",
+  "case_binary ~ ",
   paste(
     rhs_terms,
     collapse = " + "
@@ -695,6 +1050,7 @@ model_formula <- as.formula(
 message("")
 message("Model formula:")
 message("  ", formula_text)
+
 message("")
 message("Final analysis N:")
 message("  ", case_label, ": ", n_case)
@@ -805,11 +1161,27 @@ result <- data.table(
     "_vs_",
     control_label
   ),
+
   phenotype_column = phenotype_col,
+  phenotype_creation_method = phenotype_creation_method,
+
+  case_indicator_column = ifelse(
+    is.na(case_indicator_col),
+    "",
+    case_indicator_col
+  ),
+
+  control_indicator_column = ifelse(
+    is.na(control_indicator_col),
+    "",
+    control_indicator_col
+  ),
+
   case_label = case_label,
   control_label = control_label,
   case_coding = 1L,
   control_coding = 0L,
+
   IDP = idp,
 
   Beta_log_odds_per_1SD_IDP = beta,
@@ -839,7 +1211,10 @@ result <- data.table(
   IDP_mean_analysis_sample = idp_mean_final,
   IDP_SD_analysis_sample = idp_sd_final,
 
-  model_converged = isTRUE(model$converged),
+  model_converged = isTRUE(
+    model$converged
+  ),
+
   possible_separation = possible_separation,
   AIC = AIC(model),
 
@@ -847,18 +1222,22 @@ result <- data.table(
     phenotype_covariates,
     collapse = ","
   ),
+
   general_covariates = paste(
     covariates,
     collapse = ","
   ),
+
   idp_covariates = paste(
     idp_covariates,
     collapse = ","
   ),
+
   factor_covariates = paste(
     factor_covariates,
     collapse = ","
   ),
+
   model_formula = formula_text,
   glm_warnings = warning_text
 )
@@ -907,7 +1286,12 @@ message(
     eps = 1e-300
   )
 )
-message("  Direction: ", direction)
+
+message(
+  "  Direction: ",
+  direction
+)
+
 message("")
 message("Wrote:")
 message("  ", output_file)
