@@ -10,7 +10,7 @@
 #       EPOCH_z = alpha + beta * BAG_z
 #
 #   Vertical dashed lines mark low/high BAG thresholds, and diagonal dashed
-#   lines mark low/high EPOCH|BAG residual thresholds. The four p20 phenotypes
+#   lines mark low/high EPOCH|BAG residual thresholds. The four p25 phenotypes
 #   are highlighted.
 #
 # Panel B:
@@ -22,7 +22,7 @@
 #       LVA: low BAG  + high residual
 #       CUA: high BAG + high residual
 #
-# Default threshold is p20. Set THRESHOLD_TAG=p10 or p25 to reproduce the
+# Default threshold is p25. Set THRESHOLD_TAG=p10 or p25 to reproduce the
 # alternative definitions already present in the participant-level TSV.
 #
 # Expected input columns:
@@ -70,7 +70,7 @@ OUT_DIR <- Sys.getenv(
 )
 
 # Primary categorical definition. Alternatives: p10, p25.
-THRESHOLD_TAG <- Sys.getenv("THRESHOLD_TAG", "p20")
+THRESHOLD_TAG <- Sys.getenv("THRESHOLD_TAG", "p25")
 
 # Plot dimensions.
 PANEL_WIDTH_IN <- 5.2
