@@ -129,6 +129,17 @@ def parse_args():
     p.add_argument("--l1-ratios", default="0.1,0.25,0.5,0.75,1.0")
     p.add_argument("--n-alphas", type=int, default=100)
     p.add_argument("--min-followup-days", type=int, default=1)
+    p.add_argument(
+        "--final-alpha-backoff-multipliers",
+        default="1,2,5,10",
+        help=(
+            "Deterministic multipliers applied to the validation-selected alpha only if "
+            "the train+validation Coxnet refit is numerically unstable. The first stable "
+            "alpha is used; test-set performance is never used to choose it. The default "
+            "stops at 10x; if that is still unstable, the script fails rather than silently "
+            "moving far from the validation-selected model."
+        ),
+    )
 
     # Step 3 evaluation.
     p.add_argument("--n-bootstrap-comparison", type=int, default=1000)
@@ -663,6 +674,13 @@ def fit_and_select_coxnet(
                         "l1_ratio": float(l1_ratio),
                         "alpha": float(alpha),
                         "coef": coefs[:, j].copy(),
+                        "alpha_index": int(j),
+                        "n_alphas_fitted": int(len(model.alphas_)),
+                        "alpha_path_max": float(np.max(model.alphas_)),
+                        "alpha_path_min": float(np.min(model.alphas_)),
+                        "selected_at_smallest_alpha": bool(
+                            np.isclose(float(alpha), float(np.min(model.alphas_)))
+                        ),
                     }
                 )
         print(
@@ -675,24 +693,133 @@ def fit_and_select_coxnet(
     return best, penalty_factor
 
 
-def fit_final_model(X_trainval, y_trainval, best, penalty_factor):
-    try:
-        model = CoxnetSurvivalAnalysis(
-            l1_ratio=best["l1_ratio"],
-            alphas=[best["alpha"]],
-            penalty_factor=penalty_factor,
-            fit_baseline_model=True,
-            max_iter=100000,
+def fit_final_model(
+    X_trainval,
+    y_trainval,
+    best,
+    penalty_factor,
+    alpha_backoff_multipliers,
+):
+    """Refit the validation-selected Coxnet model on train+validation robustly.
+
+    Coxnet can become numerically unstable when a very small alpha that was
+    reachable along a warm-start regularization path is refit as a single-alpha
+    model on the larger train+validation set. We therefore:
+
+    1. Preserve the validation-selected l1_ratio and target alpha.
+    2. Refit using a short descending alpha path ending at the target alpha,
+       which supplies warm starts similar to the original tuning fit.
+    3. If scikit-survival raises the specific numerical ArithmeticError, increase
+       alpha deterministically and retry. The first numerically stable alpha is
+       used. No validation or test performance is consulted during this backoff.
+
+    The actual alpha used is returned and saved in the output metadata.
+    """
+    selected_alpha = float(best["alpha"])
+    l1_ratio = float(best["l1_ratio"])
+    warm_start_multipliers = (100.0, 30.0, 10.0, 3.0, 1.0)
+    attempts = []
+
+    multipliers = sorted({float(x) for x in alpha_backoff_multipliers if float(x) >= 1.0})
+    if not multipliers or multipliers[0] != 1.0:
+        multipliers = [1.0] + multipliers
+
+    last_exc = None
+    for backoff in multipliers:
+        target_alpha = selected_alpha * backoff
+        alpha_path = [target_alpha * m for m in warm_start_multipliers]
+        # Ensure strict descending order and remove accidental duplicates.
+        alpha_path = list(dict.fromkeys(alpha_path))
+        alpha_path = sorted(alpha_path, reverse=True)
+
+        print(
+            f"  Final refit attempt: selected alpha={selected_alpha:.6g}, "
+            f"multiplier={backoff:g}, target alpha={target_alpha:.6g}"
         )
-    except TypeError:
-        model = CoxnetSurvivalAnalysis(
-            l1_ratio=best["l1_ratio"],
-            alphas=[best["alpha"]],
-            fit_baseline_model=True,
-            max_iter=100000,
-        )
-    model.fit(X_trainval, y_trainval)
-    return model
+        try:
+            try:
+                model = CoxnetSurvivalAnalysis(
+                    l1_ratio=l1_ratio,
+                    alphas=alpha_path,
+                    penalty_factor=penalty_factor,
+                    fit_baseline_model=True,
+                    max_iter=100000,
+                )
+            except TypeError:
+                warnings.warn(
+                    "Installed scikit-survival does not support penalty_factor in the "
+                    "final refit. Covariates will be penalized."
+                )
+                model = CoxnetSurvivalAnalysis(
+                    l1_ratio=l1_ratio,
+                    alphas=alpha_path,
+                    fit_baseline_model=True,
+                    max_iter=100000,
+                )
+
+            model.fit(X_trainval, y_trainval)
+
+            actual_alpha = float(np.asarray(model.alphas_).reshape(-1)[-1])
+            risk = np.asarray(model.predict(X_trainval, alpha=actual_alpha)).reshape(-1)
+            if not np.all(np.isfinite(risk)):
+                raise FloatingPointError(
+                    "Final Coxnet refit produced non-finite train+validation risk scores."
+                )
+
+            coef_arr = np.asarray(model.coef_)
+            coef_last = coef_arr if coef_arr.ndim == 1 else coef_arr[:, -1]
+            if not np.all(np.isfinite(coef_last)):
+                raise FloatingPointError(
+                    "Final Coxnet refit produced non-finite coefficients."
+                )
+
+            attempts.append(
+                {
+                    "alpha_multiplier": float(backoff),
+                    "target_alpha": float(target_alpha),
+                    "status": "success",
+                    "error": None,
+                }
+            )
+            info = {
+                "selected_alpha_from_validation": selected_alpha,
+                "final_alpha_used": actual_alpha,
+                "final_alpha_multiplier": float(actual_alpha / selected_alpha),
+                "alpha_was_increased_for_numerical_stability": bool(
+                    actual_alpha > selected_alpha * (1.0 + 1e-10)
+                ),
+                "warm_start_alpha_multipliers": list(warm_start_multipliers),
+                "max_abs_trainval_linear_predictor": float(np.max(np.abs(risk))),
+                "attempts": attempts,
+            }
+            if info["alpha_was_increased_for_numerical_stability"]:
+                warnings.warn(
+                    "Final train+validation refit required a larger alpha for numerical "
+                    f"stability: {selected_alpha:.6g} -> {actual_alpha:.6g} "
+                    f"({info['final_alpha_multiplier']:.3g}x). This adjustment was based "
+                    "only on numerical convergence, not on validation/test performance."
+                )
+            return model, info
+
+        except (ArithmeticError, FloatingPointError) as exc:
+            last_exc = exc
+            attempts.append(
+                {
+                    "alpha_multiplier": float(backoff),
+                    "target_alpha": float(target_alpha),
+                    "status": "failed_numerically",
+                    "error": str(exc),
+                }
+            )
+            warnings.warn(
+                f"Final Coxnet refit failed numerically at alpha={target_alpha:.6g}: {exc}"
+            )
+            continue
+
+    raise RuntimeError(
+        "Final Coxnet refit remained numerically unstable after all alpha backoff "
+        f"attempts. Selected alpha={selected_alpha:.6g}. Last error: {last_exc}"
+    )
 
 
 def predict_risk_score(model, X):
@@ -1245,6 +1372,9 @@ def main():
     horizon_years = {label: years for label, years in horizons}
     evaluation_times = parse_float_list(args.evaluation_times, "--evaluation-times")
     l1_ratios = tuple(float(x) for x in args.l1_ratios.split(","))
+    final_alpha_backoff_multipliers = parse_float_list(
+        args.final_alpha_backoff_multipliers, "--final-alpha-backoff-multipliers"
+    )
 
     print("============================================================")
     print("Endocrine metabolomics mortality EPOCH horizon experiment")
@@ -1467,6 +1597,7 @@ def main():
     risks = {"train": {}, "validation": {}, "test": {}, "trainval": {}}
     coefficients = {}
     clock_transform_info = {}
+    final_fit_info_by_horizon = {}
     fit_summary_rows = []
 
     # ----- Train each horizon-specific clock -----
@@ -1499,10 +1630,17 @@ def main():
         print(json.dumps({k: v for k, v in best.items() if k != "coef"}, indent=2))
 
         print("Refitting final model on shared train+validation participants...")
-        model = fit_final_model(X_trainval, y_trainval, best, penalty_factor)
+        model, final_fit_info = fit_final_model(
+            X_trainval,
+            y_trainval,
+            best,
+            penalty_factor,
+            final_alpha_backoff_multipliers,
+        )
 
         models[label] = model
         best_by_horizon[label] = {k: v for k, v in best.items() if k != "coef"}
+        final_fit_info_by_horizon[label] = final_fit_info
         penalty_factor_by_horizon[label] = penalty_factor
 
         for split_name, X in [
@@ -1513,7 +1651,8 @@ def main():
         ]:
             risks[split_name][label] = predict_risk_score(model, X)
 
-        coef = np.asarray(model.coef_).reshape(-1)
+        coef_arr = np.asarray(model.coef_)
+        coef = coef_arr.reshape(-1) if coef_arr.ndim == 1 else coef_arr[:, -1]
         coefficients[label] = coef
 
         split_y = {
@@ -1535,7 +1674,12 @@ def main():
                         yy, risks[split_name][label]
                     ),
                     "best_l1_ratio": float(best["l1_ratio"]),
-                    "best_alpha": float(best["alpha"]),
+                    "selected_alpha_from_validation": float(best["alpha"]),
+                    "final_alpha_used": float(final_fit_info["final_alpha_used"]),
+                    "final_alpha_multiplier": float(final_fit_info["final_alpha_multiplier"]),
+                    "alpha_was_increased_for_numerical_stability": bool(
+                        final_fit_info["alpha_was_increased_for_numerical_stability"]
+                    ),
                     "best_validation_cindex_during_tuning": float(best["cindex"]),
                     "n_nonzero_coefficients": int(np.sum(coef != 0)),
                 }
@@ -1746,6 +1890,7 @@ def main():
         "dropped_numeric": dropped_numeric,
         "residualization_covariates": residualization_covariates,
         "best_by_horizon": best_by_horizon,
+        "final_fit_info_by_horizon": final_fit_info_by_horizon,
         "penalty_factor_by_horizon": penalty_factor_by_horizon,
         "clock_transform_info": clock_transform_info,
         "organ_tsv_input": args.organ_tsv,
@@ -1772,6 +1917,7 @@ def main():
         "split_stratify_horizon": split_key,
         "split_stratify_event_col": strat_event_col,
         "best_by_horizon": best_by_horizon,
+        "final_fit_info_by_horizon": final_fit_info_by_horizon,
         "fit_summary": json.loads(fit_summary_df.to_json(orient="records")),
         "common_test_mortality_evaluation": json.loads(
             mortality_eval_df.to_json(orient="records")

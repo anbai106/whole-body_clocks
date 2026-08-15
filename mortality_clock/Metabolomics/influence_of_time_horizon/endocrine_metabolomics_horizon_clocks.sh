@@ -6,7 +6,6 @@
 #SBATCH --output=/cbica/home/wenju/output/endocrine_epoch_horizons_%j.out
 #SBATCH --error=/cbica/home/wenju/output/endocrine_epoch_horizons_%j.err
 
-
 source activate survival_clock
 
 organ="Endocrine"
@@ -48,13 +47,23 @@ python /cbica/home/wenju/Project/whole-body_clocks/mortality_clock/Metabolomics/
   --l1-ratios 0.1,0.25,0.5,0.75,1.0 \
   --n-alphas 100 \
   --min-followup-days 1 \
+  --final-alpha-backoff-multipliers 1,2,5,10 \
   --n-bootstrap-comparison 1000 \
   --n-calibration-groups 10 \
   --ibs-grid-points 30 \
-  --ibs-start-years 0.5
+  --ibs-start-years 0.5 || {
+    status=$?
+    echo "============================================================"
+    echo "ERROR: Endocrine metabolomics EPOCH analysis failed"
+    echo "Python exit code: ${status}"
+    echo "Failed at: $(date)"
+    echo "============================================================"
+    conda deactivate || true
+    exit "${status}"
+  }
 
 echo "============================================================"
-echo "Finished Endocrine metabolomics EPOCH mortality-horizon experiment"
+echo "SUCCESS: Finished Endocrine metabolomics EPOCH mortality-horizon experiment"
 echo "Finished at: $(date)"
 echo "============================================================"
 
