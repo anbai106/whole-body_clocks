@@ -1,22 +1,22 @@
 #!/bin/bash
 #SBATCH --partition=all
-#SBATCH --job-name=stroke_hepatic_EPOCH_vs_10bio
+#SBATCH --job-name=mi_immune_EPOCH_vs_10bio
 #SBATCH --mem-per-cpu=24G
 #SBATCH --time=00:05:00
-#SBATCH --output=/cbica/home/wenju/output/stroke_hepatic_EPOCH_vs_10bio_%j.out
-#SBATCH --error=/cbica/home/wenju/output/stroke_hepatic_EPOCH_vs_10bio_%j.err
+#SBATCH --output=/cbica/home/wenju/output/mi_immune_EPOCH_vs_10bio_%j.out
+#SBATCH --error=/cbica/home/wenju/output/mi_immune_EPOCH_vs_10bio_%j.err
 
 # ==============================================================================
 # Apple-to-apple landmark survival comparison for all-cause mortality:
 #
-#   Stroke hepatic-proteomics disease-specific EPOCH
+#   MI immune-metabolomics disease-specific EPOCH
 #       versus
 #   10 conventional UK Biobank mortality biomarkers
 #
 # Every Cox model is fitted in ONE IDENTICAL population:
 #   complete EPOCH + all 10 biomarkers + valid mortality follow-up.
 #
-# Proteomics landmark:
+# Metabolomics landmark:
 #   UKB Field 53 instance 0_0
 #
 # Default common baseline covariates:
@@ -66,9 +66,9 @@ BIOMARKER_CSV="${BIOMARKER_CSV:-${BASE_DIR}/comparative_with_10_conventional_bio
 # Analysis code and output
 # ------------------------------------------------------------------------------
 
-PY_SCRIPT="${PY_SCRIPT:-/cbica/home/wenju/Project/whole-body_clocks/mortality_prediction_disease_clock/comparative_with_10_conventional_biomarkers/mortality_compare_stroke_hepatic_proteomics_vs_10_biomarkers.py}"
+PY_SCRIPT="${PY_SCRIPT:-/cbica/home/wenju/Project/whole-body_clocks/mortality_prediction_disease_clock/comparative_with_10_conventional_biomarkers/mortality_compare_mi_immune_metabolomics_vs_10_biomarkers.py}"
 
-OUTPUT_DIR="${OUTPUT_DIR:-${BASE_DIR}/comparative_with_10_conventional_biomarkers/2_mortality_comparison_stroke_hepatic_proteomics}"
+OUTPUT_DIR="${OUTPUT_DIR:-${BASE_DIR}/comparative_with_10_conventional_biomarkers/2_mortality_comparison_mi_immune_metabolomics}"
 
 ADMIN_CENSOR_DATE="${ADMIN_CENSOR_DATE:-2022-11-30}"
 
@@ -83,7 +83,7 @@ CONDA_ENV="${CONDA_ENV:-survival}"
 # Target clock
 # ------------------------------------------------------------------------------
 #
-# The Python script resolves the exact stroke hepatic-proteomics score column
+# The Python script resolves the exact MI immune-metabolomics score column
 # from the stable/significant 47-clock metadata. This avoids hard-coding a
 # guessed column name.
 #
@@ -94,9 +94,9 @@ CONDA_ENV="${CONDA_ENV:-survival}"
 # before submitting.
 # ------------------------------------------------------------------------------
 
-DISEASE_KEY="${DISEASE_KEY:-stroke}"
-ORGAN_KEY="${ORGAN_KEY:-hepatic}"
-MODALITY_KEY="${MODALITY_KEY:-proteomics}"
+DISEASE_KEY="${DISEASE_KEY:-mi}"
+ORGAN_KEY="${ORGAN_KEY:-immune}"
+MODALITY_KEY="${MODALITY_KEY:-metabolomics}"
 SCORE_COL="${SCORE_COL:-}"
 
 # ------------------------------------------------------------------------------
@@ -132,7 +132,7 @@ OVERWRITE="${OVERWRITE:-0}"
 mkdir -p /cbica/home/wenju/output
 mkdir -p "${OUTPUT_DIR}"
 
-EXPECTED_SUMMARY="${OUTPUT_DIR}/stroke_hepatic_proteomics_EPOCH_vs_10_biomarkers_mortality_summary.tsv"
+EXPECTED_SUMMARY="${OUTPUT_DIR}/mi_immune_metabolomics_EPOCH_vs_10_biomarkers_mortality_summary.tsv"
 
 # ------------------------------------------------------------------------------
 # Input checks
@@ -170,7 +170,7 @@ if [[ -s "${EXPECTED_SUMMARY}" && "${OVERWRITE}" != "1" ]]; then
 fi
 
 echo "================================================================================"
-echo "Stroke hepatic-proteomics EPOCH vs 10 conventional biomarkers"
+echo "MI immune-metabolomics EPOCH vs 10 conventional biomarkers"
 echo "Apple-to-apple all-cause mortality landmark survival comparison"
 echo "================================================================================"
 echo "SCORE_WIDE_TSV:"
