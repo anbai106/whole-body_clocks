@@ -23,7 +23,7 @@
 #   higher regional gray-matter volume is associated with greater odds of CUA.
 #
 # Primary categorical phenotype:
-#   p20, using CRA_p20 versus CUA_p20. The R script constructs this binary
+#   p25, using CRA_p25 versus CUA_p25. The R script constructs this binary
 #   phenotype automatically from the resilience TSV.
 ###############################################################################
 
@@ -187,7 +187,7 @@ mkdir -p "/cbica/home/wenju/output"
 # Phenotype definition
 # -----------------------------------------------------------------------------
 
-PHENOTYPE_COL="aging_phenotype_p20"
+PHENOTYPE_COL="aging_phenotype_p25"
 CASE_LABEL="CRA"
 CONTROL_LABEL="CUA"
 

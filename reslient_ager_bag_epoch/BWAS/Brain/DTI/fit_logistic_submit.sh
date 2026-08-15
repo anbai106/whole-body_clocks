@@ -24,7 +24,7 @@
 #   negative beta / OR < 1 = higher imaging feature associated with CUA
 #
 # Primary categorical threshold:
-#   p20, using aging_phenotype_p20
+#   p25, using aging_phenotype_p25
 #
 # This DTI submit script contains 192 IDPs, so the correct array is 0-191.
 # The uploaded older script used 0-192, which had one out-of-range task.
@@ -123,7 +123,7 @@ mkdir -p "/cbica/home/wenju/output"
 # Phenotype definition
 # -----------------------------------------------------------------------------
 
-PHENOTYPE_COL="aging_phenotype_p20"
+PHENOTYPE_COL="aging_phenotype_p25"
 CASE_LABEL="CRA"
 CONTROL_LABEL="CUA"
 

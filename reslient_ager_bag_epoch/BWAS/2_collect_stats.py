@@ -1,622 +1,1296 @@
+#!/usr/bin/env python3
+"""
+Collect detailed CRA-vs-CUA brain imaging association results across:
+    1) DTI / white-matter features
+    2) T1 MUSE gray-matter features
+    3) functional MRI connectivity features
+
+This script is adapted for the brain-proteomics EPOCH-BAG resilience analysis.
+
+Expected per-feature input filename
+-----------------------------------
+    CRA_vs_CUA_logistic_results_<IDP>.tsv
+
+Expected default local-Mac directory structure
+----------------------------------------------
+/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/mortality_clock/BWAS/
+    Brain_proteomics_EPOCH_BAG_resilience/
+        CRA_vs_CUA/
+            DTI/
+            T1/
+            FC/
+
+The collector deliberately DISCOVERS result files from each directory instead
+of relying on hard-coded IDP lists. This avoids several failure modes in the
+older collector:
+    - a mismatch between the stated number of DTI features and the actual list,
+    - needing to edit the collector every time a modality changes,
+    - losing newly added IDPs,
+    - failure when one result file is missing.
+
+All columns written by fit_logistic.R are preserved. Additional columns are
+added for:
+    - modality,
+    - imaging feature family,
+    - beta direction,
+    - nominal significance,
+    - BH-FDR and Bonferroni correction within modality,
+    - BH-FDR and Bonferroni correction across all three modalities,
+    - QC and collection provenance.
+
+Outputs
+-------
+Per-modality full results:
+    BWAS_CRA_vs_CUA_DTI_all_statistics.tsv
+    BWAS_CRA_vs_CUA_T1_all_statistics.tsv
+    BWAS_CRA_vs_CUA_FC_all_statistics.tsv
+
+Combined:
+    BWAS_CRA_vs_CUA_all_modalities_all_statistics.tsv
+
+Subsets:
+    BWAS_CRA_vs_CUA_nominal_P_lt_0.05.tsv
+    BWAS_CRA_vs_CUA_FDR_lt_0.05_within_modality.tsv
+    BWAS_CRA_vs_CUA_FDR_lt_0.05_all_modalities.tsv
+
+QC / summary:
+    BWAS_CRA_vs_CUA_collection_audit.tsv
+    BWAS_CRA_vs_CUA_modality_summary.tsv
+
+Interpretation
+--------------
+The regression outcome is:
+    CRA = 1
+    CUA = 0
+
+Therefore:
+    Beta_log_odds_per_1SD_IDP > 0
+        higher IDP is associated with greater odds of CRA
+
+    Beta_log_odds_per_1SD_IDP < 0
+        higher IDP is associated with greater odds of CUA
+
+The sign is reported separately from statistical significance. A nonsignificant
+negative beta is NOT automatically labeled as evidence for CUA.
+
+Usage
+-----
+Default local Mac:
+    python collect_CRA_CUA_BWAS_results.py
+
+Explicit root:
+    python collect_CRA_CUA_BWAS_results.py \
+        --analysis-root /path/to/Brain_proteomics_EPOCH_BAG_resilience/CRA_vs_CUA
+
+Explicit output:
+    python collect_CRA_CUA_BWAS_results.py \
+        --output-dir /path/to/summary_results
+
+Cluster example:
+    python collect_CRA_CUA_BWAS_results.py \
+        --analysis-root \
+        /cbica/home/wenju/Reproducibile_paper/WholeBodyClock/mortality_clock/BWAS/Brain_proteomics_EPOCH_BAG_resilience/CRA_vs_CUA
+"""
+
+from __future__ import annotations
+
+import argparse
+import math
+import re
+import sys
+from pathlib import Path
+from typing import Dict, Iterable, List, Optional, Tuple
+
 import numpy as np
 import pandas as pd
-import os
 
-########################################################################################################################
-### 119 Brain GM MUSE
-########################################################################################################################
-idp_list_gm = [
-    "MUSE_Volume_23", "MUSE_Volume_30", "MUSE_Volume_31", "MUSE_Volume_32", "MUSE_Volume_36", "MUSE_Volume_37",
-    "MUSE_Volume_38", "MUSE_Volume_39", "MUSE_Volume_47", "MUSE_Volume_48", "MUSE_Volume_55", "MUSE_Volume_56",
-    "MUSE_Volume_57", "MUSE_Volume_58", "MUSE_Volume_59", "MUSE_Volume_60", "MUSE_Volume_71", "MUSE_Volume_72",
-    "MUSE_Volume_73", "MUSE_Volume_75", "MUSE_Volume_76", "MUSE_Volume_100", "MUSE_Volume_101", "MUSE_Volume_102",
-    "MUSE_Volume_103", "MUSE_Volume_104", "MUSE_Volume_105", "MUSE_Volume_106", "MUSE_Volume_107", "MUSE_Volume_108",
-    "MUSE_Volume_109", "MUSE_Volume_112", "MUSE_Volume_113", "MUSE_Volume_114", "MUSE_Volume_115", "MUSE_Volume_116",
-    "MUSE_Volume_117", "MUSE_Volume_118", "MUSE_Volume_119", "MUSE_Volume_120", "MUSE_Volume_121", "MUSE_Volume_122",
-    "MUSE_Volume_123", "MUSE_Volume_124", "MUSE_Volume_125", "MUSE_Volume_128", "MUSE_Volume_129", "MUSE_Volume_132",
-    "MUSE_Volume_133", "MUSE_Volume_134", "MUSE_Volume_135", "MUSE_Volume_136", "MUSE_Volume_137", "MUSE_Volume_138",
-    "MUSE_Volume_139", "MUSE_Volume_140", "MUSE_Volume_141", "MUSE_Volume_142", "MUSE_Volume_143", "MUSE_Volume_144",
-    "MUSE_Volume_145", "MUSE_Volume_146", "MUSE_Volume_147", "MUSE_Volume_148", "MUSE_Volume_149", "MUSE_Volume_150",
-    "MUSE_Volume_151", "MUSE_Volume_152", "MUSE_Volume_153", "MUSE_Volume_154", "MUSE_Volume_155", "MUSE_Volume_156",
-    "MUSE_Volume_157", "MUSE_Volume_160", "MUSE_Volume_161", "MUSE_Volume_162", "MUSE_Volume_163", "MUSE_Volume_164",
-    "MUSE_Volume_165", "MUSE_Volume_166", "MUSE_Volume_167", "MUSE_Volume_168", "MUSE_Volume_169", "MUSE_Volume_170",
-    "MUSE_Volume_171", "MUSE_Volume_172", "MUSE_Volume_173", "MUSE_Volume_174", "MUSE_Volume_175", "MUSE_Volume_176",
-    "MUSE_Volume_177", "MUSE_Volume_178", "MUSE_Volume_179", "MUSE_Volume_180", "MUSE_Volume_181", "MUSE_Volume_182",
-    "MUSE_Volume_183", "MUSE_Volume_184", "MUSE_Volume_185", "MUSE_Volume_186", "MUSE_Volume_187", "MUSE_Volume_190",
-    "MUSE_Volume_191", "MUSE_Volume_192", "MUSE_Volume_193", "MUSE_Volume_194", "MUSE_Volume_195", "MUSE_Volume_196",
-    "MUSE_Volume_197", "MUSE_Volume_198", "MUSE_Volume_199", "MUSE_Volume_200", "MUSE_Volume_201", "MUSE_Volume_202",
-    "MUSE_Volume_203", "MUSE_Volume_204", "MUSE_Volume_205", "MUSE_Volume_206", "MUSE_Volume_207"
-]
-df_brain_gm = pd.DataFrame(columns=['BAG', 'IDP', 'Log_Odds', 'SE', 'Z', 'P_value', 'OR', 'OR_CI_Lower', 'OR_CI_Upper'])
-i = 0
-for idp in idp_list_gm:
-    tsv = os.path.join('/Users/hao/cubic-home/Reproducibile_paper/SleepAging/NSS/BWAS/Brain/T1', 'NSS_logistic_results_' + f'{idp}' + '.tsv')
-    i += 1
-    if os.path.exists(tsv):
-        print(f'Collect: {tsv}')
-        df = pd.read_csv(tsv, sep='\t')
-        
-        if i == 1:
-            df_brain_gm = df
-        else:
-            df_brain_gm = pd.concat([df_brain_gm, df], ignore_index=True)
-    else:
-        print(f'Model does not converge: {tsv}')
 
-df_brain_gm['Organ'] = 'Brain-GM'
-df_brain_gm.to_csv('/Users/hao/cubic-home/Reproducibile_paper/SleepAging/NSS/Result/BWAS_result_Brain_GM.tsv', index=False, sep='\t')
+# =============================================================================
+# DEFAULT PATHS
+# =============================================================================
 
-########################################################################################################################
-### 192 WM DTI
-########################################################################################################################
-idp_list_wm = [
-    "mean_fa_in_middle_cerebellar_peduncle_on_fa_skeleton_f25056_2_0",
-    "mean_fa_in_pontine_crossing_tract_on_fa_skeleton_f25057_2_0",
-    "mean_fa_in_genu_of_corpus_callosum_on_fa_skeleton_f25058_2_0",
-    "mean_fa_in_body_of_corpus_callosum_on_fa_skeleton_f25059_2_0",
-    "mean_fa_in_splenium_of_corpus_callosum_on_fa_skeleton_f25060_2_0",
-    "mean_fa_in_fornix_on_fa_skeleton_f25061_2_0",
-    "mean_fa_in_corticospinal_tract_on_fa_skeleton_right_f25062_2_0",
-    "mean_fa_in_corticospinal_tract_on_fa_skeleton_left_f25063_2_0",
-    "mean_fa_in_medial_lemniscus_on_fa_skeleton_right_f25064_2_0",
-    "mean_fa_in_medial_lemniscus_on_fa_skeleton_left_f25065_2_0",
-    "mean_fa_in_inferior_cerebellar_peduncle_on_fa_skeleton_right_f25066_2_0",
-    "mean_fa_in_inferior_cerebellar_peduncle_on_fa_skeleton_left_f25067_2_0",
-    "mean_fa_in_superior_cerebellar_peduncle_on_fa_skeleton_right_f25068_2_0",
-    "mean_fa_in_superior_cerebellar_peduncle_on_fa_skeleton_left_f25069_2_0",
-    "mean_fa_in_cerebral_peduncle_on_fa_skeleton_right_f25070_2_0",
-    "mean_fa_in_cerebral_peduncle_on_fa_skeleton_left_f25071_2_0",
-    "mean_fa_in_anterior_limb_of_internal_capsule_on_fa_skeleton_right_f25072_2_0",
-    "mean_fa_in_anterior_limb_of_internal_capsule_on_fa_skeleton_left_f25073_2_0",
-    "mean_fa_in_posterior_limb_of_internal_capsule_on_fa_skeleton_right_f25074_2_0",
-    "mean_fa_in_posterior_limb_of_internal_capsule_on_fa_skeleton_left_f25075_2_0",
-    "mean_fa_in_retrolenticular_part_of_internal_capsule_on_fa_skeleton_right_f25076_2_0",
-    "mean_fa_in_retrolenticular_part_of_internal_capsule_on_fa_skeleton_left_f25077_2_0",
-    "mean_fa_in_anterior_corona_radiata_on_fa_skeleton_right_f25078_2_0",
-    "mean_fa_in_anterior_corona_radiata_on_fa_skeleton_left_f25079_2_0",
-    "mean_fa_in_superior_corona_radiata_on_fa_skeleton_right_f25080_2_0",
-    "mean_fa_in_superior_corona_radiata_on_fa_skeleton_left_f25081_2_0",
-    "mean_fa_in_posterior_corona_radiata_on_fa_skeleton_right_f25082_2_0",
-    "mean_fa_in_posterior_corona_radiata_on_fa_skeleton_left_f25083_2_0",
-    "mean_fa_in_posterior_thalamic_radiation_on_fa_skeleton_right_f25084_2_0",
-    "mean_fa_in_posterior_thalamic_radiation_on_fa_skeleton_left_f25085_2_0",
-    "mean_fa_in_sagittal_stratum_on_fa_skeleton_right_f25086_2_0",
-    "mean_fa_in_sagittal_stratum_on_fa_skeleton_left_f25087_2_0",
-    "mean_fa_in_external_capsule_on_fa_skeleton_right_f25088_2_0",
-    "mean_fa_in_external_capsule_on_fa_skeleton_left_f25089_2_0",
-    "mean_fa_in_cingulum_cingulate_gyrus_on_fa_skeleton_right_f25090_2_0",
-    "mean_fa_in_cingulum_cingulate_gyrus_on_fa_skeleton_left_f25091_2_0",
-    "mean_fa_in_cingulum_hippocampus_on_fa_skeleton_right_f25092_2_0",
-    "mean_fa_in_cingulum_hippocampus_on_fa_skeleton_left_f25093_2_0",
-    "mean_fa_in_fornix_cresstria_terminalis_on_fa_skeleton_right_f25094_2_0",
-    "mean_fa_in_fornix_cresstria_terminalis_on_fa_skeleton_left_f25095_2_0",
-    "mean_fa_in_superior_longitudinal_fasciculus_on_fa_skeleton_right_f25096_2_0",
-    "mean_fa_in_superior_longitudinal_fasciculus_on_fa_skeleton_left_f25097_2_0",
-    "mean_fa_in_superior_frontooccipital_fasciculus_on_fa_skeleton_right_f25098_2_0",
-    "mean_fa_in_superior_frontooccipital_fasciculus_on_fa_skeleton_left_f25099_2_0",
-    "mean_fa_in_uncinate_fasciculus_on_fa_skeleton_right_f25100_2_0",
-    "mean_fa_in_uncinate_fasciculus_on_fa_skeleton_left_f25101_2_0",
-    "mean_fa_in_tapetum_on_fa_skeleton_right_f25102_2_0",
-    "mean_fa_in_tapetum_on_fa_skeleton_left_f25103_2_0",
-    "mean_md_in_middle_cerebellar_peduncle_on_fa_skeleton_f25104_2_0",
-    "mean_md_in_pontine_crossing_tract_on_fa_skeleton_f25105_2_0",
-    "mean_md_in_genu_of_corpus_callosum_on_fa_skeleton_f25106_2_0",
-    "mean_md_in_body_of_corpus_callosum_on_fa_skeleton_f25107_2_0",
-    "mean_md_in_splenium_of_corpus_callosum_on_fa_skeleton_f25108_2_0",
-    "mean_md_in_fornix_on_fa_skeleton_f25109_2_0",
-    "mean_md_in_corticospinal_tract_on_fa_skeleton_right_f25110_2_0",
-    "mean_md_in_corticospinal_tract_on_fa_skeleton_left_f25111_2_0",
-    "mean_md_in_medial_lemniscus_on_fa_skeleton_right_f25112_2_0",
-    "mean_md_in_medial_lemniscus_on_fa_skeleton_left_f25113_2_0",
-    "mean_md_in_inferior_cerebellar_peduncle_on_fa_skeleton_right_f25114_2_0",
-    "mean_md_in_inferior_cerebellar_peduncle_on_fa_skeleton_left_f25115_2_0",
-    "mean_md_in_superior_cerebellar_peduncle_on_fa_skeleton_right_f25116_2_0",
-    "mean_md_in_superior_cerebellar_peduncle_on_fa_skeleton_left_f25117_2_0",
-    "mean_md_in_cerebral_peduncle_on_fa_skeleton_right_f25118_2_0",
-    "mean_md_in_cerebral_peduncle_on_fa_skeleton_left_f25119_2_0",
-    "mean_md_in_anterior_limb_of_internal_capsule_on_fa_skeleton_right_f25120_2_0",
-    "mean_md_in_anterior_limb_of_internal_capsule_on_fa_skeleton_left_f25121_2_0",
-    "mean_md_in_posterior_limb_of_internal_capsule_on_fa_skeleton_right_f25122_2_0",
-    "mean_md_in_posterior_limb_of_internal_capsule_on_fa_skeleton_left_f25123_2_0",
-    "mean_md_in_retrolenticular_part_of_internal_capsule_on_fa_skeleton_right_f25124_2_0",
-    "mean_md_in_retrolenticular_part_of_internal_capsule_on_fa_skeleton_left_f25125_2_0",
-    "mean_md_in_anterior_corona_radiata_on_fa_skeleton_right_f25126_2_0",
-    "mean_md_in_anterior_corona_radiata_on_fa_skeleton_left_f25127_2_0",
-    "mean_md_in_superior_corona_radiata_on_fa_skeleton_right_f25128_2_0",
-    "mean_md_in_superior_corona_radiata_on_fa_skeleton_left_f25129_2_0",
-    "mean_md_in_posterior_corona_radiata_on_fa_skeleton_right_f25130_2_0",
-    "mean_md_in_posterior_corona_radiata_on_fa_skeleton_left_f25131_2_0",
-    "mean_md_in_posterior_thalamic_radiation_on_fa_skeleton_right_f25132_2_0",
-    "mean_md_in_posterior_thalamic_radiation_on_fa_skeleton_left_f25133_2_0",
-    "mean_md_in_sagittal_stratum_on_fa_skeleton_right_f25134_2_0",
-    "mean_md_in_sagittal_stratum_on_fa_skeleton_left_f25135_2_0",
-    "mean_md_in_external_capsule_on_fa_skeleton_right_f25136_2_0",
-    "mean_md_in_external_capsule_on_fa_skeleton_left_f25137_2_0",
-    "mean_md_in_cingulum_cingulate_gyrus_on_fa_skeleton_right_f25138_2_0",
-    "mean_md_in_cingulum_cingulate_gyrus_on_fa_skeleton_left_f25139_2_0",
-    "mean_md_in_cingulum_hippocampus_on_fa_skeleton_right_f25140_2_0",
-    "mean_md_in_cingulum_hippocampus_on_fa_skeleton_left_f25141_2_0",
-    "mean_md_in_fornix_cresstria_terminalis_on_fa_skeleton_right_f25142_2_0",
-    "mean_md_in_fornix_cresstria_terminalis_on_fa_skeleton_left_f25143_2_0",
-    "mean_md_in_superior_longitudinal_fasciculus_on_fa_skeleton_right_f25144_2_0",
-    "mean_md_in_superior_longitudinal_fasciculus_on_fa_skeleton_left_f25145_2_0",
-    "mean_md_in_superior_frontooccipital_fasciculus_on_fa_skeleton_right_f25146_2_0",
-    "mean_md_in_superior_frontooccipital_fasciculus_on_fa_skeleton_left_f25147_2_0",
-    "mean_md_in_uncinate_fasciculus_on_fa_skeleton_right_f25148_2_0",
-    "mean_md_in_uncinate_fasciculus_on_fa_skeleton_left_f25149_2_0",
-    "mean_md_in_tapetum_on_fa_skeleton_right_f25150_2_0",
-    "mean_md_in_tapetum_on_fa_skeleton_left_f25151_2_0",
-    "mean_icvf_in_middle_cerebellar_peduncle_on_fa_skeleton_f25344_2_0",
-    "mean_icvf_in_pontine_crossing_tract_on_fa_skeleton_f25345_2_0",
-    "mean_icvf_in_genu_of_corpus_callosum_on_fa_skeleton_f25346_2_0",
-    "mean_icvf_in_body_of_corpus_callosum_on_fa_skeleton_f25347_2_0",
-    "mean_icvf_in_splenium_of_corpus_callosum_on_fa_skeleton_f25348_2_0",
-    "mean_icvf_in_fornix_on_fa_skeleton_f25349_2_0",
-    "mean_icvf_in_corticospinal_tract_on_fa_skeleton_right_f25350_2_0",
-    "mean_icvf_in_corticospinal_tract_on_fa_skeleton_left_f25351_2_0",
-    "mean_icvf_in_medial_lemniscus_on_fa_skeleton_right_f25352_2_0",
-    "mean_icvf_in_medial_lemniscus_on_fa_skeleton_left_f25353_2_0",
-    "mean_icvf_in_inferior_cerebellar_peduncle_on_fa_skeleton_right_f25354_2_0",
-    "mean_icvf_in_inferior_cerebellar_peduncle_on_fa_skeleton_left_f25355_2_0",
-    "mean_icvf_in_superior_cerebellar_peduncle_on_fa_skeleton_right_f25356_2_0",
-    "mean_icvf_in_superior_cerebellar_peduncle_on_fa_skeleton_left_f25357_2_0",
-    "mean_icvf_in_cerebral_peduncle_on_fa_skeleton_right_f25358_2_0",
-    "mean_icvf_in_cerebral_peduncle_on_fa_skeleton_left_f25359_2_0",
-    "mean_icvf_in_anterior_limb_of_internal_capsule_on_fa_skeleton_right_f25360_2_0",
-    "mean_icvf_in_anterior_limb_of_internal_capsule_on_fa_skeleton_left_f25361_2_0",
-    "mean_icvf_in_posterior_limb_of_internal_capsule_on_fa_skeleton_right_f25362_2_0",
-    "mean_icvf_in_posterior_limb_of_internal_capsule_on_fa_skeleton_left_f25363_2_0",
-    "mean_icvf_in_retrolenticular_part_of_internal_capsule_on_fa_skeleton_right_f25364_2_0",
-    "mean_icvf_in_retrolenticular_part_of_internal_capsule_on_fa_skeleton_left_f25365_2_0",
-    "mean_icvf_in_anterior_corona_radiata_on_fa_skeleton_right_f25366_2_0",
-    "mean_icvf_in_anterior_corona_radiata_on_fa_skeleton_left_f25367_2_0",
-    "mean_icvf_in_superior_corona_radiata_on_fa_skeleton_right_f25368_2_0",
-    "mean_icvf_in_superior_corona_radiata_on_fa_skeleton_left_f25369_2_0",
-    "mean_icvf_in_posterior_corona_radiata_on_fa_skeleton_right_f25370_2_0",
-    "mean_icvf_in_posterior_corona_radiata_on_fa_skeleton_left_f25371_2_0",
-    "mean_icvf_in_posterior_thalamic_radiation_on_fa_skeleton_right_f25372_2_0",
-    "mean_icvf_in_posterior_thalamic_radiation_on_fa_skeleton_left_f25373_2_0",
-    "mean_icvf_in_sagittal_stratum_on_fa_skeleton_right_f25374_2_0",
-    "mean_icvf_in_sagittal_stratum_on_fa_skeleton_left_f25375_2_0",
-    "mean_icvf_in_external_capsule_on_fa_skeleton_right_f25376_2_0",
-    "mean_icvf_in_external_capsule_on_fa_skeleton_left_f25377_2_0",
-    "mean_icvf_in_cingulum_cingulate_gyrus_on_fa_skeleton_right_f25378_2_0",
-    "mean_icvf_in_cingulum_cingulate_gyrus_on_fa_skeleton_left_f25379_2_0",
-    "mean_icvf_in_cingulum_hippocampus_on_fa_skeleton_right_f25380_2_0",
-    "mean_icvf_in_cingulum_hippocampus_on_fa_skeleton_left_f25381_2_0",
-    "mean_icvf_in_fornix_cresstria_terminalis_on_fa_skeleton_right_f25382_2_0",
-    "mean_icvf_in_fornix_cresstria_terminalis_on_fa_skeleton_left_f25383_2_0",
-    "mean_icvf_in_superior_longitudinal_fasciculus_on_fa_skeleton_right_f25384_2_0",
-    "mean_icvf_in_superior_longitudinal_fasciculus_on_fa_skeleton_left_f25385_2_0",
-    "mean_icvf_in_superior_frontooccipital_fasciculus_on_fa_skeleton_right_f25386_2_0",
-    "mean_icvf_in_superior_frontooccipital_fasciculus_on_fa_skeleton_left_f25387_2_0",
-    "mean_icvf_in_uncinate_fasciculus_on_fa_skeleton_right_f25388_2_0",
-    "mean_icvf_in_uncinate_fasciculus_on_fa_skeleton_left_f25389_2_0",
-    "mean_icvf_in_tapetum_on_fa_skeleton_right_f25390_2_0",
-    "mean_icvf_in_tapetum_on_fa_skeleton_left_f25391_2_0",
-    "mean_od_in_middle_cerebellar_peduncle_on_fa_skeleton_f25392_2_0",
-    "mean_od_in_pontine_crossing_tract_on_fa_skeleton_f25393_2_0",
-    "mean_od_in_genu_of_corpus_callosum_on_fa_skeleton_f25394_2_0",
-    "mean_od_in_body_of_corpus_callosum_on_fa_skeleton_f25395_2_0",
-    "mean_od_in_splenium_of_corpus_callosum_on_fa_skeleton_f25396_2_0",
-    "mean_od_in_fornix_on_fa_skeleton_f25397_2_0",
-    "mean_od_in_corticospinal_tract_on_fa_skeleton_right_f25398_2_0",
-    "mean_od_in_corticospinal_tract_on_fa_skeleton_left_f25399_2_0",
-    "mean_od_in_medial_lemniscus_on_fa_skeleton_right_f25400_2_0",
-    "mean_od_in_medial_lemniscus_on_fa_skeleton_left_f25401_2_0",
-    "mean_od_in_inferior_cerebellar_peduncle_on_fa_skeleton_right_f25402_2_0",
-    "mean_od_in_inferior_cerebellar_peduncle_on_fa_skeleton_left_f25403_2_0",
-    "mean_od_in_superior_cerebellar_peduncle_on_fa_skeleton_right_f25404_2_0",
-    "mean_od_in_superior_cerebellar_peduncle_on_fa_skeleton_left_f25405_2_0",
-    "mean_od_in_cerebral_peduncle_on_fa_skeleton_right_f25406_2_0",
-    "mean_od_in_cerebral_peduncle_on_fa_skeleton_left_f25407_2_0",
-    "mean_od_in_anterior_limb_of_internal_capsule_on_fa_skeleton_right_f25408_2_0",
-    "mean_od_in_anterior_limb_of_internal_capsule_on_fa_skeleton_left_f25409_2_0",
-    "mean_od_in_posterior_limb_of_internal_capsule_on_fa_skeleton_right_f25410_2_0",
-    "mean_od_in_posterior_limb_of_internal_capsule_on_fa_skeleton_left_f25411_2_0",
-    "mean_od_in_retrolenticular_part_of_internal_capsule_on_fa_skeleton_right_f25412_2_0",
-    "mean_od_in_retrolenticular_part_of_internal_capsule_on_fa_skeleton_left_f25413_2_0",
-    "mean_od_in_anterior_corona_radiata_on_fa_skeleton_right_f25414_2_0",
-    "mean_od_in_anterior_corona_radiata_on_fa_skeleton_left_f25415_2_0",
-    "mean_od_in_superior_corona_radiata_on_fa_skeleton_right_f25416_2_0",
-    "mean_od_in_superior_corona_radiata_on_fa_skeleton_left_f25417_2_0",
-    "mean_od_in_posterior_corona_radiata_on_fa_skeleton_right_f25418_2_0",
-    "mean_od_in_posterior_corona_radiata_on_fa_skeleton_left_f25419_2_0",
-    "mean_od_in_posterior_thalamic_radiation_on_fa_skeleton_right_f25420_2_0",
-    "mean_od_in_posterior_thalamic_radiation_on_fa_skeleton_left_f25421_2_0",
-    "mean_od_in_sagittal_stratum_on_fa_skeleton_right_f25422_2_0",
-    "mean_od_in_sagittal_stratum_on_fa_skeleton_left_f25423_2_0",
-    "mean_od_in_external_capsule_on_fa_skeleton_right_f25424_2_0",
-    "mean_od_in_external_capsule_on_fa_skeleton_left_f25425_2_0",
-    "mean_od_in_cingulum_cingulate_gyrus_on_fa_skeleton_right_f25426_2_0",
-    "mean_od_in_cingulum_cingulate_gyrus_on_fa_skeleton_left_f25427_2_0",
-    "mean_od_in_cingulum_hippocampus_on_fa_skeleton_right_f25428_2_0",
-    "mean_od_in_cingulum_hippocampus_on_fa_skeleton_left_f25429_2_0",
-    "mean_od_in_fornix_cresstria_terminalis_on_fa_skeleton_right_f25430_2_0",
-    "mean_od_in_fornix_cresstria_terminalis_on_fa_skeleton_left_f25431_2_0",
-    "mean_od_in_superior_longitudinal_fasciculus_on_fa_skeleton_right_f25432_2_0",
-    "mean_od_in_superior_longitudinal_fasciculus_on_fa_skeleton_left_f25433_2_0",
-    "mean_od_in_superior_frontooccipital_fasciculus_on_fa_skeleton_right_f25434_2_0",
-    "mean_od_in_superior_frontooccipital_fasciculus_on_fa_skeleton_left_f25435_2_0",
-    "mean_od_in_uncinate_fasciculus_on_fa_skeleton_right_f25436_2_0",
-    "mean_od_in_uncinate_fasciculus_on_fa_skeleton_left_f25437_2_0",
-    "mean_od_in_tapetum_on_fa_skeleton_right_f25438_2_0",
-    "mean_od_in_tapetum_on_fa_skeleton_left_f25439_2_0"
-]
-df_brain_wm = pd.DataFrame(columns=['BAG', 'IDP', 'Log_Odds', 'SE', 'Z', 'P_value', 'OR', 'OR_CI_Lower', 'OR_CI_Upper'])
-i = 0
-for idp in idp_list_wm:
-    tsv = os.path.join('/Users/hao/cubic-home/Reproducibile_paper/SleepAging/NSS/BWAS/Brain/DTI', 'NSS_logistic_results_' + f'{idp}' + '.tsv')
-    i += 1
-    if os.path.exists(tsv):
-        print(f'Collect: {tsv}')
-        df = pd.read_csv(tsv, sep='\t')
-        
-        if i == 1:
-            df_brain_wm = df
-        else:
-            df_brain_wm = pd.concat([df_brain_wm, df], ignore_index=True)
-    else:
-        print(f'Model does not converge: {tsv}')
-df_brain_wm['Organ'] = 'Brain-WM'
-df_brain_wm.to_csv('/Users/hao/cubic-home/Reproducibile_paper/SleepAging/NSS/Result/BWAS_result_Brain_WM.tsv', index=False, sep='\t')
+DEFAULT_ANALYSIS_ROOT = Path(
+    "/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/"
+    "mortality_clock/BWAS/"
+    "Brain_proteomics_EPOCH_BAG_resilience/CRA_vs_CUA"
+)
 
-########################################################################################################################
-### 210 FC
-########################################################################################################################
-idp_list_fc = [
-    "f_1", "f_2", "f_3", "f_4", "f_5", "f_6", "f_7", "f_8", "f_9", "f_10",
-    "f_11", "f_12", "f_13", "f_14", "f_15", "f_16", "f_17", "f_18", "f_19", "f_20",
-    "f_21", "f_22", "f_23", "f_24", "f_25", "f_26", "f_27", "f_28", "f_29", "f_30",
-    "f_31", "f_32", "f_33", "f_34", "f_35", "f_36", "f_37", "f_38", "f_39", "f_40",
-    "f_41", "f_42", "f_43", "f_44", "f_45", "f_46", "f_47", "f_48", "f_49", "f_50",
-    "f_51", "f_52", "f_53", "f_54", "f_55", "f_56", "f_57", "f_58", "f_59", "f_60",
-    "f_61", "f_62", "f_63", "f_64", "f_65", "f_66", "f_67", "f_68", "f_69", "f_70",
-    "f_71", "f_72", "f_73", "f_74", "f_75", "f_76", "f_77", "f_78", "f_79", "f_80",
-    "f_81", "f_82", "f_83", "f_84", "f_85", "f_86", "f_87", "f_88", "f_89", "f_90",
-    "f_91", "f_92", "f_93", "f_94", "f_95", "f_96", "f_97", "f_98", "f_99", "f_100",
-    "f_101", "f_102", "f_103", "f_104", "f_105", "f_106", "f_107", "f_108", "f_109", "f_110",
-    "f_111", "f_112", "f_113", "f_114", "f_115", "f_116", "f_117", "f_118", "f_119", "f_120",
-    "f_121", "f_122", "f_123", "f_124", "f_125", "f_126", "f_127", "f_128", "f_129", "f_130",
-    "f_131", "f_132", "f_133", "f_134", "f_135", "f_136", "f_137", "f_138", "f_139", "f_140",
-    "f_141", "f_142", "f_143", "f_144", "f_145", "f_146", "f_147", "f_148", "f_149", "f_150",
-    "f_151", "f_152", "f_153", "f_154", "f_155", "f_156", "f_157", "f_158", "f_159", "f_160",
-    "f_161", "f_162", "f_163", "f_164", "f_165", "f_166", "f_167", "f_168", "f_169", "f_170",
-    "f_171", "f_172", "f_173", "f_174", "f_175", "f_176", "f_177", "f_178", "f_179", "f_180",
-    "f_181", "f_182", "f_183", "f_184", "f_185", "f_186", "f_187", "f_188", "f_189", "f_190",
-    "f_191", "f_192", "f_193", "f_194", "f_195", "f_196", "f_197", "f_198", "f_199", "f_200",
-    "f_201", "f_202", "f_203", "f_204", "f_205", "f_206", "f_207", "f_208", "f_209", "f_210"
-]
-df_brain_fc = pd.DataFrame(columns=['BAG', 'IDP', 'Log_Odds', 'SE', 'Z', 'P_value', 'OR', 'OR_CI_Lower', 'OR_CI_Upper'])
-i = 0
-for idp in idp_list_fc:
-    tsv = os.path.join('/Users/hao/cubic-home/Reproducibile_paper/SleepAging/NSS/BWAS/Brain/FC', 'NSS_logistic_results_' + f'{idp}' + '.tsv')
-    i += 1
-    if os.path.exists(tsv):
-        print(f'Collect: {tsv}')
-        df = pd.read_csv(tsv, sep='\t')
-        
-        if i == 1:
-            df_brain_fc = df
-        else:
-            df_brain_fc = pd.concat([df_brain_fc, df], ignore_index=True)
-    else:
-        print(f'Model does not converge: {tsv}')
-df_brain_fc['Organ'] = 'Brain-FC'
-df_brain_fc.to_csv('/Users/hao/cubic-home/Reproducibile_paper/SleepAging/NSS/Result/BWAS_result_Brain_FC.tsv', index=False, sep='\t')
+DEFAULT_OUTPUT_DIR = (
+    DEFAULT_ANALYSIS_ROOT / "combined_results"
+)
 
-########################################################################################################################
-### 82 Heart
-########################################################################################################################
-idp_list_heart = [
-    "lv_end_diastolic_volume_f24100_2_0",
-    "lv_end_systolic_volume_f24101_2_0",
-    "lv_stroke_volume_f24102_2_0",
-    "lv_ejection_fraction_f24103_2_0",
-    "lv_cardiac_output_f24104_2_0",
-    "lv_myocardial_mass_f24105_2_0",
-    "rv_end_diastolic_volume_f24106_2_0",
-    "rv_end_systolic_volume_f24107_2_0",
-    "rv_stroke_volume_f24108_2_0",
-    "rv_ejection_fraction_f24109_2_0",
-    "la_maximum_volume_f24110_2_0",
-    "la_minimum_volume_f24111_2_0",
-    "la_stroke_volume_f24112_2_0",
-    "la_ejection_fraction_f24113_2_0",
-    "ra_maximum_volume_f24114_2_0",
-    "ra_minimum_volume_f24115_2_0",
-    "ra_stroke_volume_f24116_2_0",
-    "ra_ejection_fraction_f24117_2_0",
-    "ascending_aorta_maximum_area_f24118_2_0",
-    "ascending_aorta_minimum_area_f24119_2_0",
-    "ascending_aorta_distensibility_f24120_2_0",
-    "descending_aorta_maximum_area_f24121_2_0",
-    "descending_aorta_minimum_area_f24122_2_0",
-    "descending_aorta_distensibility_f24123_2_0",
-    "lv_mean_myocardial_wall_thickness_aha_1_f24124_2_0",
-    "lv_mean_myocardial_wall_thickness_aha_2_f24125_2_0",
-    "lv_mean_myocardial_wall_thickness_aha_3_f24126_2_0",
-    "lv_mean_myocardial_wall_thickness_aha_4_f24127_2_0",
-    "lv_mean_myocardial_wall_thickness_aha_5_f24128_2_0",
-    "lv_mean_myocardial_wall_thickness_aha_6_f24129_2_0",
-    "lv_mean_myocardial_wall_thickness_aha_7_f24130_2_0",
-    "lv_mean_myocardial_wall_thickness_aha_8_f24131_2_0",
-    "lv_mean_myocardial_wall_thickness_aha_9_f24132_2_0",
-    "lv_mean_myocardial_wall_thickness_aha_10_f24133_2_0",
-    "lv_mean_myocardial_wall_thickness_aha_11_f24134_2_0",
-    "lv_mean_myocardial_wall_thickness_aha_12_f24135_2_0",
-    "lv_mean_myocardial_wall_thickness_aha_13_f24136_2_0",
-    "lv_mean_myocardial_wall_thickness_aha_14_f24137_2_0",
-    "lv_mean_myocardial_wall_thickness_aha_15_f24138_2_0",
-    "lv_mean_myocardial_wall_thickness_aha_16_f24139_2_0",
-    "lv_mean_myocardial_wall_thickness_global_f24140_2_0",
-    "lv_circumferential_strain_aha_1_f24141_2_0",
-    "lv_circumferential_strain_aha_2_f24142_2_0",
-    "lv_circumferential_strain_aha_3_f24143_2_0",
-    "lv_circumferential_strain_aha_4_f24144_2_0",
-    "lv_circumferential_strain_aha_5_f24145_2_0",
-    "lv_circumferential_strain_aha_6_f24146_2_0",
-    "lv_circumferential_strain_aha_7_f24147_2_0",
-    "lv_circumferential_strain_aha_8_f24148_2_0",
-    "lv_circumferential_strain_aha_9_f24149_2_0",
-    "lv_circumferential_strain_aha_10_f24150_2_0",
-    "lv_circumferential_strain_aha_11_f24151_2_0",
-    "lv_circumferential_strain_aha_12_f24152_2_0",
-    "lv_circumferential_strain_aha_13_f24153_2_0",
-    "lv_circumferential_strain_aha_14_f24154_2_0",
-    "lv_circumferential_strain_aha_15_f24155_2_0",
-    "lv_circumferential_strain_aha_16_f24156_2_0",
-    "lv_circumferential_strain_global_f24157_2_0",
-    "lv_radial_strain_aha_1_f24158_2_0",
-    "lv_radial_strain_aha_2_f24159_2_0",
-    "lv_radial_strain_aha_3_f24160_2_0",
-    "lv_radial_strain_aha_4_f24161_2_0",
-    "lv_radial_strain_aha_5_f24162_2_0",
-    "lv_radial_strain_aha_6_f24163_2_0",
-    "lv_radial_strain_aha_7_f24164_2_0",
-    "lv_radial_strain_aha_8_f24165_2_0",
-    "lv_radial_strain_aha_9_f24166_2_0",
-    "lv_radial_strain_aha_10_f24167_2_0",
-    "lv_radial_strain_aha_11_f24168_2_0",
-    "lv_radial_strain_aha_12_f24169_2_0",
-    "lv_radial_strain_aha_13_f24170_2_0",
-    "lv_radial_strain_aha_14_f24171_2_0",
-    "lv_radial_strain_aha_15_f24172_2_0",
-    "lv_radial_strain_aha_16_f24173_2_0",
-    "lv_radial_strain_global_f24174_2_0",
-    "lv_longitudinal_strain_segment_1_f24175_2_0",
-    "lv_longitudinal_strain_segment_2_f24176_2_0",
-    "lv_longitudinal_strain_segment_3_f24177_2_0",
-    "lv_longitudinal_strain_segment_4_f24178_2_0",
-    "lv_longitudinal_strain_segment_5_f24179_2_0",
-    "lv_longitudinal_strain_segment_6_f24180_2_0",
-    "lv_longitudinal_strain_global_f24181_2_0"
-]
+RESULT_PREFIX = "CRA_vs_CUA_logistic_results_"
+RESULT_SUFFIX = ".tsv"
 
-df_heart = pd.DataFrame(columns=['BAG', 'IDP', 'Log_Odds', 'SE', 'Z', 'P_value', 'OR', 'OR_CI_Lower', 'OR_CI_Upper'])
-i = 0
-for idp in idp_list_heart:
-    tsv = os.path.join('/Users/hao/cubic-home/Reproducibile_paper/SleepAging/NSS/BWAS/Heart', 'NSS_logistic_results_' + f'{idp}' + '.tsv')
-    i += 1
-    if os.path.exists(tsv):
-        print(f'Collect: {tsv}')
-        df = pd.read_csv(tsv, sep='\t')
-        
-        if i == 1:
-            df_heart = df
-        else:
-            df_heart = pd.concat([df_heart, df], ignore_index=True)
-    else:
-        print(f'Model does not converge: {tsv}')
-df_heart['Organ'] = 'Heart'
-df_heart.to_csv('/Users/hao/cubic-home/Reproducibile_paper/SleepAging/NSS/Result/BWAS_result_Heart.tsv', index=False, sep='\t')
-
-########################################################################################################################
-### 88 Eye
-########################################################################################################################
-idp_list_eye = [
-    "overall_macular_thickness_left_f27800_0_0",
-    "macular_thickness_at_the_central_subfield_left_f27802_0_0",
-    "macular_thickness_at_the_inner_inferior_subfield_left_f27804_0_0",
-    "macular_thickness_at_the_inner_nasal_subfield_left_f27806_0_0",
-    "macular_thickness_at_the_inner_superior_subfield_left_f27808_0_0",
-    "macular_thickness_at_the_inner_temporal_subfield_left_f27810_0_0",
-    "macular_thickness_at_the_outer_inferior_subfield_left_f27812_0_0",
-    "macular_thickness_at_the_outer_nasal_subfield_left_f27814_0_0",
-    "macular_thickness_at_the_outer_superior_subfield_left_f27816_0_0",
-    "macular_thickness_at_the_outer_temporal_subfield_left_f27818_0_0",
-    "average_retinal_nerve_fibre_layer_thickness_left_f28500_0_0",
-    "average_inner_nuclear_layer_thickness_left_f28502_0_0",
-    "average_ganglion_cellinner_plexiform_layer_thickness_left_f28504_0_0",
-    "inlelm_thickness_of_the_central_subfield_left_f28506_0_0",
-    "inlelm_thickness_of_the_inner_subfield_left_f28508_0_0",
-    "inlelm_thickness_of_the_outer_subfield_left_f28510_0_0",
-    "average_inlelm_thickness_left_f28512_0_0",
-    "elmisos_thickness_of_central_subfield_left_f28514_0_0",
-    "elmisos_thickness_of_inner_subfield_left_f28516_0_0",
-    "elmisos_thickness_of_outer_subfield_left_f28518_0_0",
-    "average_elmisos_thickness_left_f28520_0_0",
-    "isosrpe_thickness_of_central_subfield_left_f28522_0_0",
-    "isosrpe_thickness_of_inner_subfield_left_f28524_0_0",
-    "isosrpe_thickness_of_outer_subfield_left_f28526_0_0",
-    "average_isosrpe_thickness_left_f28528_0_0",
-    "inlrpe_thickness_of_central_subfield_left_f28530_0_0",
-    "inlrpe_thickness_of_inner_subfield_left_f28532_0_0",
-    "inlrpe_thickness_of_outer_subfield_left_f28534_0_0",
-    "average_inlrpe_thickness_left_f28536_0_0",
-    "overall_average_retinal_pigment_epithelium_thickness_left_f27822_0_0",
-    "retinal_pigment_epithelium_thickness_at_central_subfield_left_f27824_0_0",
-    "retinal_pigment_epithelium_thickness_at_inner_inferior_subfield_left_f27826_0_0",
-    "retinal_pigment_epithelium_thickness_at_inner_nasal_subfield_left_f27828_0_0",
-    "retinal_pigment_epithelium_thickness_at_inner_superior_subfield_left_f27830_0_0",
-    "retinal_pigment_epithelium_thickness_at_inner_temporal_subfield_left_f27832_0_0",
-    "retinal_pigment_epithelium_thickness_at_outer_inferior_subfield_left_f27834_0_0",
-    "retinal_pigment_epithelium_thickness_at_outer_nasal_subfield_left_f27836_0_0",
-    "retinal_pigment_epithelium_thickness_at_outer_superior_subfield_left_f27838_0_0",
-    "retinal_pigment_epithelium_thickness_at_outer_temporal_subfield_left_f27840_0_0",
-    "disc_diameter_after_inverse_rank_normal_transformation_left_f27851_0_0",
-    "mean_of_vertical_disc_diameter_left_f27853_0_0",
-    "vertical_cup_to_disc_ratio_vcdr_regressed_and_transformed_left_f27855_0_0",
-    "vertical_cup_to_disc_ratio_vcdr_left_f27857_0_0",
-    "total_macular_volume_left_f27820_0_0",
-    "overall_macular_thickness_right_f27801_0_0",
-    "macular_thickness_at_the_central_subfield_right_f27803_0_0",
-    "macular_thickness_at_the_inner_inferior_subfield_right_f27805_0_0",
-    "macular_thickness_at_the_inner_nasal_subfield_right_f27807_0_0",
-    "macular_thickness_at_the_inner_superior_subfield_right_f27809_0_0",
-    "macular_thickness_at_the_inner_temporal_subfield_right_f27811_0_0",
-    "macular_thickness_at_the_outer_inferior_subfield_right_f27813_0_0",
-    "macular_thickness_at_the_outer_nasal_subfield_right_f27815_0_0",
-    "macular_thickness_at_the_outer_superior_subfield_right_f27817_0_0",
-    "macular_thickness_at_the_outer_temporal_subfield_right_f27819_0_0",
-    "average_retinal_nerve_fibre_layer_thickness_right_f28501_0_0",
-    "average_inner_nuclear_layer_thickness_right_f28503_0_0",
-    "average_ganglion_cellinner_plexiform_layer_thickness_right_f28505_0_0",
-    "inlelm_thickness_of_the_central_subfield_right_f28507_0_0",
-    "inlelm_thickness_of_the_inner_subfield_right_f28509_0_0",
-    "inlelm_thickness_of_the_outer_subfield_right_f28511_0_0",
-    "average_inlelm_thickness_right_f28513_0_0",
-    "elmisos_thickness_of_central_subfield_right_f28515_0_0",
-    "elmisos_thickness_of_inner_subfield_right_f28517_0_0",
-    "elmisos_thickness_of_outer_subfield_right_f28519_0_0",
-    "average_elmisos_thickness_right_f28521_0_0",
-    "isosrpe_thickness_of_central_subfield_right_f28523_0_0",
-    "isosrpe_thickness_of_inner_subfield_right_f28525_0_0",
-    "isosrpe_thickness_of_outer_subfield_right_f28527_0_0",
-    "average_isosrpe_thickness_right_f28529_0_0",
-    "inlrpe_thickness_of_central_subfield_right_f28531_0_0",
-    "inlrpe_thickness_of_inner_subfield_right_f28533_0_0",
-    "inlrpe_thickness_of_outer_subfield_right_f28535_0_0",
-    "average_inlrpe_thickness_right_f28537_0_0",
-    "overall_average_retinal_pigment_epithelium_thickness_right_f27823_0_0",
-    "retinal_pigment_epithelium_thickness_at_central_subfield_right_f27825_0_0",
-    "retinal_pigment_epithelium_thickness_at_inner_inferior_subfield_right_f27827_0_0",
-    "retinal_pigment_epithelium_thickness_at_inner_nasal_subfield_right_f27829_0_0",
-    "retinal_pigment_epithelium_thickness_at_inner_superior_subfield_right_f27831_0_0",
-    "retinal_pigment_epithelium_thickness_at_inner_temporal_subfield_right_f27833_0_0",
-    "retinal_pigment_epithelium_thickness_at_outer_inferior_subfield_right_f27835_0_0",
-    "retinal_pigment_epithelium_thickness_at_outer_nasal_subfield_right_f27837_0_0",
-    "retinal_pigment_epithelium_thickness_at_outer_superior_subfield_right_f27839_0_0",
-    "retinal_pigment_epithelium_thickness_at_outer_temporal_subfield_right_f27841_0_0",
-    "disc_diameter_after_inverse_rank_normal_transformation_right_f27852_0_0",
-    "mean_of_vertical_disc_diameter_right_f27854_0_0",
-    "vertical_cup_to_disc_ratio_vcdr_regressed_and_transformed_right_f27856_0_0",
-    "vertical_cup_to_disc_ratio_vcdr_right_f27858_0_0",
-    "total_macular_volume_right_f27821_0_0"
-]
-df_eye = pd.DataFrame(columns=['BAG', 'IDP', 'Log_Odds', 'SE', 'Z', 'P_value', 'OR', 'OR_CI_Lower', 'OR_CI_Upper'])
-i = 0
-for idp in idp_list_eye:
-    tsv = os.path.join('/Users/hao/cubic-home/Reproducibile_paper/SleepAging/NSS/BWAS/Eye', 'NSS_logistic_results_' + f'{idp}' + '.tsv')
-    i += 1
-    if os.path.exists(tsv):
-        print(f'Collect: {tsv}')
-        df = pd.read_csv(tsv, sep='\t')
-        
-        if i == 1:
-            df_eye = df
-        else:
-            df_eye = pd.concat([df_eye, df], ignore_index=True)
-    else:
-        print(f'Model does not converge: {tsv}')
-df_eye['Organ'] = 'Eye'
-df_eye.to_csv('/Users/hao/cubic-home/Reproducibile_paper/SleepAging/NSS/Result/BWAS_result_Eye.tsv', index=False, sep='\t')
-
-########################################################################################################################
-### 29 Abdominal
-########################################################################################################################
-idp_list_abdominal = [
-    "Visceral_fat_volume_21085_2_0",
-    "Pancreas_PDFF_fat_fraction_21090_2_0",
-    "Anterior_thigh_fat_free_muscle_volume_right_22403_2_0",
-    "Posterior_thigh_fat_free_muscle_volume_right_22404_2_0",
-    "Anterior_thigh_fat_free_muscle_volume_left_22405_2_0",
-    "Posterior_thigh_fat_free_muscle_volume_left_22406_2_0",
-    "Abdominal_subcutaneous_adipose_tissue_volume_ASAT_22408_2_0",
-    "Total_trunk_fat_volume_22410_2_0",
-    "Total_abdominal_adipose_tissue_index_22432_2_0",
-    "Abdominal_fat_ratio_22434_2_0",
-    "Muscle_fat_infiltration_22435_2_0",
-    "Posterior_thigh_muscle_fat_infiltration_MFI_left_23355_2_0",
-    "Posterior_thigh_muscle_fat_infiltration_MFI_right_23356_2_0",
-    "Anterior_thigh_muscle_fat_infiltration_MFI_left_24353_2_0",
-    "Anterior_thigh_muscle_fat_infiltration_MFI_right_24354_2_0",
-    "Proton_density_fat_fraction_PDFF_40061_2_0",
-    "Left_kidney_volume_21081_2_0",
-    "Kidney_parenchyma_right_21162_2_0",
-    "Kidney_distance_21163_2_0",
-    "Liver_volume_21080_2_0",
-    "Liver_PDFF_fat_fraction_21088_2_0",
-    "Liver_iron_21089_2_0",
-    "Liver_iron_corrected_T1_ct1_40062_2_0",
-    "Pancreas_volume_21087_2_0",
-    "Pancreas_PDFF_fat_fraction_21090_2_0_pancreas",
-    "Pancreas_iron_21091_2_0",
-    "Spleen_volume_21083_2_0",
-    "Spleen_iron_IDEAL_21170_2_0",
-    "Spleen_iron_protocol_normalised_21173_2_0",
-]
-df_abdominal = pd.DataFrame(columns=['BAG', 'IDP', 'Log_Odds', 'SE', 'Z', 'P_value', 'OR', 'OR_CI_Lower', 'OR_CI_Upper'])
-i = 0
-for idp in idp_list_abdominal:
-    tsv = os.path.join('/Users/hao/cubic-home/Reproducibile_paper/SleepAging/NSS/BWAS/Abdominal', 'NSS_logistic_results_' + f'{idp}' + '.tsv')
-    i += 1
-    if os.path.exists(tsv):
-        print(f'Collect: {tsv}')
-        df = pd.read_csv(tsv, sep='\t')
-        
-        if i == 1:
-            df_abdominal = df
-        else:
-            df_abdominal = pd.concat([df_abdominal, df], ignore_index=True)
-    else:
-        print(f'Model does not converge: {tsv}')
-idp_dict_abdominal = {
-    "Visceral_fat_volume_21085_2_0": "Adipose",
-    "Pancreas_PDFF_fat_fraction_21090_2_0": "Pancreas",
-    "Anterior_thigh_fat_free_muscle_volume_right_22403_2_0": "Adipose",
-    "Posterior_thigh_fat_free_muscle_volume_right_22404_2_0": "Adipose",
-    "Posterior_thigh_fat_free_muscle_volume_left_22406_2_0": "Adipose",
-    "Abdominal_subcutaneous_adipose_tissue_volume_ASAT_22408_2_0": "Adipose",
-    "Total_trunk_fat_volume_22410_2_0": "Adipose",
-    "Total_abdominal_adipose_tissue_index_22432_2_0": "Adipose",
-    "Abdominal_fat_ratio_22434_2_0": "Adipose",
-    "Muscle_fat_infiltration_22435_2_0": "Adipose",
-    "Posterior_thigh_muscle_fat_infiltration_MFI_left_23355_2_0": "Adipose",
-    "Posterior_thigh_muscle_fat_infiltration_MFI_right_23356_2_0": "Adipose",
-    "Anterior_thigh_muscle_fat_infiltration_MFI_left_24353_2_0": "Adipose",
-    "Anterior_thigh_muscle_fat_infiltration_MFI_right_24354_2_0": "Adipose",
-    "Proton_density_fat_fraction_PDFF_40061_2_0": "Adipose",
-    "Left_kidney_volume_21081_2_0": "Kidney",
-    "Kidney_parenchyma_right_21162_2_0": "Kidney",
-    "Kidney_distance_21163_2_0": "Kidney",
-    "Liver_volume_21080_2_0": "Liver",
-    "Liver_PDFF_fat_fraction_21088_2_0": "Adipose",
-    "Liver_iron_21089_2_0": "Liver",
-    "Liver_iron_corrected_T1_ct1_40062_2_0": "Liver",
-    "Pancreas_volume_21087_2_0": "Pancreas",
-    "Pancreas_PDFF_fat_fraction_21090_2_0_pancreas": "Pancreas",
-    "Pancreas_iron_21091_2_0": "Pancreas",
-    "Spleen_volume_21083_2_0": "Spleen",
-    "Spleen_iron_IDEAL_21170_2_0": "Spleen",
-    "Spleen_iron_protocol_normalised_21173_2_0": "Spleen"
+MODALITY_DIRS: Dict[str, str] = {
+    "DTI": "DTI",
+    "T1": "T1",
+    "FC": "FC",
 }
-# Add Organ column to df_abdominal
-df_abdominal["Organ"] = df_abdominal["IDP"].map(idp_dict_abdominal)
-df_abdominal.to_csv('/Users/hao/cubic-home/Reproducibile_paper/SleepAging/NSS/Result/BWAS_result_Abdominal.tsv', index=False, sep='\t')
 
-#### concate the results across the different organs
-df_final = pd.concat([df_brain_gm, df_brain_wm, df_brain_fc,
-                      df_heart,
-                      df_eye,
-                      df_abdominal
-                      ], ignore_index=True)
+MODALITY_LABELS: Dict[str, str] = {
+    "DTI": "Brain-WM-DTI",
+    "T1": "Brain-GM-T1",
+    "FC": "Brain-FC-fMRI",
+}
 
-### remove OR>10 becasue the signals are not true
-df_final = df_final[df_final["OR"] <= 10]
-df_final = df_final[~df_final["BAG"].str.endswith("_MRIBAG", na=False)].copy()
-df_final.to_csv('/Users/hao/cubic-home/Reproducibile_paper/SleepAging/NSS/Result/BWAS_result.tsv', index=False, sep='\t')
-df_final_sig = df_final[df_final['P_value'] < 0.05/len(df_final['IDP'].unique())]
-df_final_sig.to_csv('/Users/hao/cubic-home/Reproducibile_paper/SleepAging/NSS/Result/BWAS_result_bon.tsv', index=False, sep='\t')
+# Optional expected numbers for a simple completeness audit.
+#
+# T1 and FC are fixed from the submit scripts used here.
+# DTI is left as None deliberately because the current project has used both
+# an FA-only 48-feature analysis and broader DTI sets containing additional
+# MD/ICVF/OD features. File discovery remains the source of truth.
+DEFAULT_EXPECTED_COUNTS: Dict[str, Optional[int]] = {
+    "DTI": None,
+    "T1": 119,
+    "FC": 210,
+}
 
-print('stop here...')
+
+# =============================================================================
+# REQUIRED / PREFERRED RESULT COLUMNS
+# =============================================================================
+
+REQUIRED_COLUMNS = [
+    "IDP",
+    "Beta_log_odds_per_1SD_IDP",
+    "SE",
+    "Z",
+    "P_value",
+    "OR_per_1SD_IDP",
+    "OR_CI95_lower",
+    "OR_CI95_upper",
+    "N_case",
+    "N_control",
+    "N_total",
+]
+
+PREFERRED_COLUMN_ORDER = [
+    # Collection / modality metadata
+    "Modality",
+    "Organ",
+    "Feature_family",
+    "IDP",
+    "source_file",
+    "collection_status",
+
+    # Comparison definition
+    "comparison",
+    "phenotype_column",
+    "phenotype_creation_method",
+    "case_indicator_column",
+    "control_indicator_column",
+    "case_label",
+    "control_label",
+    "case_coding",
+    "control_coding",
+
+    # Main association statistics
+    "Beta_log_odds_per_1SD_IDP",
+    "SE",
+    "Z",
+    "P_value",
+    "OR_per_1SD_IDP",
+    "OR_CI95_lower",
+    "OR_CI95_upper",
+
+    # Direction and multiple-testing statistics
+    "Beta_direction",
+    "Nominal_P_lt_0.05",
+    "P_value_FDR_BH_within_modality",
+    "P_value_Bonferroni_within_modality",
+    "FDR_BH_lt_0.05_within_modality",
+    "Bonferroni_lt_0.05_within_modality",
+    "P_value_FDR_BH_all_modalities",
+    "P_value_Bonferroni_all_modalities",
+    "FDR_BH_lt_0.05_all_modalities",
+    "Bonferroni_lt_0.05_all_modalities",
+    "N_tests_within_modality",
+    "N_tests_all_modalities",
+
+    # Sample sizes and QC
+    "N_case",
+    "N_control",
+    "N_total",
+    "N_case_in_phenotype_file",
+    "N_control_in_phenotype_file",
+    "N_after_merge",
+    "N_complete_before_outlier_filter",
+    "N_IDP_outliers_removed",
+    "IDP_outlier_SD_threshold",
+    "IDP_mean_before_outlier_filter",
+    "IDP_SD_before_outlier_filter",
+    "IDP_mean_analysis_sample",
+    "IDP_SD_analysis_sample",
+    "model_converged",
+    "possible_separation",
+    "AIC",
+
+    # Model specification
+    "phenotype_covariates",
+    "general_covariates",
+    "idp_covariates",
+    "factor_covariates",
+    "model_formula",
+    "glm_warnings",
+
+    # Original R-script direction field retained for provenance
+    "Direction",
+]
+
+
+# =============================================================================
+# ARGUMENTS
+# =============================================================================
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Collect detailed CRA-vs-CUA DTI, T1, and fMRI association results."
+        )
+    )
+
+    parser.add_argument(
+        "--analysis-root",
+        type=Path,
+        default=DEFAULT_ANALYSIS_ROOT,
+        help=(
+            "Root directory containing DTI/, T1/, and FC/. "
+            f"Default: {DEFAULT_ANALYSIS_ROOT}"
+        ),
+    )
+
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Output directory. Default: <analysis-root>/combined_results"
+        ),
+    )
+
+    parser.add_argument(
+        "--alpha",
+        type=float,
+        default=0.05,
+        help="Significance threshold. Default: 0.05",
+    )
+
+    parser.add_argument(
+        "--expected-dti",
+        type=int,
+        default=None,
+        help=(
+            "Optional expected DTI feature count for audit purposes only. "
+            "Default: unspecified."
+        ),
+    )
+
+    parser.add_argument(
+        "--expected-t1",
+        type=int,
+        default=119,
+        help="Expected T1 feature count for audit. Default: 119",
+    )
+
+    parser.add_argument(
+        "--expected-fc",
+        type=int,
+        default=210,
+        help="Expected FC feature count for audit. Default: 210",
+    )
+
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help=(
+            "Stop on malformed result files. Without --strict, malformed files "
+            "are recorded in the audit and collection continues."
+        ),
+    )
+
+    return parser.parse_args()
+
+
+# =============================================================================
+# MULTIPLE-TESTING HELPERS
+# =============================================================================
+
+def bh_fdr(p_values: Iterable[float]) -> np.ndarray:
+    """
+    Benjamini-Hochberg FDR adjustment.
+
+    Returns NaN for missing/non-finite p-values.
+    """
+    p = np.asarray(list(p_values), dtype=float)
+    adjusted = np.full(p.shape, np.nan, dtype=float)
+
+    valid = np.isfinite(p) & (p >= 0) & (p <= 1)
+    p_valid = p[valid]
+
+    if p_valid.size == 0:
+        return adjusted
+
+    order = np.argsort(p_valid)
+    ranked = p_valid[order]
+    m = len(ranked)
+
+    raw_adj = ranked * m / np.arange(1, m + 1)
+
+    # Enforce monotonicity from largest rank backward.
+    monotone = np.minimum.accumulate(raw_adj[::-1])[::-1]
+    monotone = np.minimum(monotone, 1.0)
+
+    restored = np.empty_like(monotone)
+    restored[order] = monotone
+
+    adjusted[valid] = restored
+    return adjusted
+
+
+def bonferroni(p_values: Iterable[float]) -> np.ndarray:
+    """
+    Bonferroni adjustment across non-missing valid p-values.
+    """
+    p = np.asarray(list(p_values), dtype=float)
+    adjusted = np.full(p.shape, np.nan, dtype=float)
+
+    valid = np.isfinite(p) & (p >= 0) & (p <= 1)
+    m = int(valid.sum())
+
+    if m == 0:
+        return adjusted
+
+    adjusted[valid] = np.minimum(
+        p[valid] * m,
+        1.0,
+    )
+
+    return adjusted
+
+
+# =============================================================================
+# FEATURE ANNOTATION
+# =============================================================================
+
+def infer_feature_family(modality: str, idp: str) -> str:
+    """
+    Add a compact feature-family annotation without changing the original IDP.
+    """
+    x = str(idp).lower()
+
+    if modality == "DTI":
+        if x.startswith("mean_fa_"):
+            return "FA"
+        if x.startswith("mean_md_"):
+            return "MD"
+        if x.startswith("mean_icvf_"):
+            return "ICVF"
+        if x.startswith("mean_od_"):
+            return "OD"
+        if x.startswith("mean_isovf_"):
+            return "ISOVF"
+        return "DTI_other"
+
+    if modality == "T1":
+        if str(idp).startswith("MUSE_Volume_"):
+            return "MUSE_GM_volume"
+        return "T1_other"
+
+    if modality == "FC":
+        if re.fullmatch(r"f_\d+", str(idp)):
+            return "functional_connectivity"
+        return "fMRI_other"
+
+    return "other"
+
+
+def beta_direction(beta: float) -> str:
+    """
+    Point-estimate direction only. Significance is handled separately.
+    """
+    if not np.isfinite(beta):
+        return "NA"
+
+    if beta > 0:
+        return "Higher_IDP_more_CRA_like"
+
+    if beta < 0:
+        return "Higher_IDP_more_CUA_like"
+
+    return "Zero_beta"
+
+
+# =============================================================================
+# FILE DISCOVERY / VALIDATION
+# =============================================================================
+
+def discover_result_files(directory: Path) -> List[Path]:
+    if not directory.exists():
+        return []
+
+    return sorted(
+        directory.glob(
+            f"{RESULT_PREFIX}*{RESULT_SUFFIX}"
+        )
+    )
+
+
+def expected_idp_from_filename(path: Path) -> str:
+    name = path.name
+
+    if not (
+        name.startswith(RESULT_PREFIX)
+        and name.endswith(RESULT_SUFFIX)
+    ):
+        return ""
+
+    return name[
+        len(RESULT_PREFIX) :
+        -len(RESULT_SUFFIX)
+    ]
+
+
+def read_one_result(
+    path: Path,
+    modality: str,
+    strict: bool,
+) -> Tuple[Optional[pd.DataFrame], dict]:
+    """
+    Read one per-IDP result TSV.
+
+    Returns:
+        dataframe or None
+        audit dictionary
+    """
+    audit = {
+        "Modality": modality,
+        "source_file": str(path),
+        "filename": path.name,
+        "expected_IDP_from_filename": expected_idp_from_filename(path),
+        "status": "unknown",
+        "message": "",
+        "N_rows_in_file": np.nan,
+        "IDP_in_file": "",
+    }
+
+    try:
+        df = pd.read_csv(
+            path,
+            sep="\t",
+            low_memory=False,
+        )
+    except Exception as exc:
+        audit["status"] = "read_error"
+        audit["message"] = str(exc)
+
+        if strict:
+            raise
+
+        return None, audit
+
+    audit["N_rows_in_file"] = len(df)
+
+    missing = [
+        c for c in REQUIRED_COLUMNS
+        if c not in df.columns
+    ]
+
+    if missing:
+        audit["status"] = "missing_required_columns"
+        audit["message"] = ", ".join(missing)
+
+        if strict:
+            raise ValueError(
+                f"{path} is missing required columns: "
+                + ", ".join(missing)
+            )
+
+        return None, audit
+
+    if len(df) == 0:
+        audit["status"] = "empty_file"
+        audit["message"] = "No result rows."
+
+        if strict:
+            raise ValueError(f"Empty result file: {path}")
+
+        return None, audit
+
+    if len(df) != 1:
+        audit["status"] = "unexpected_row_count"
+        audit["message"] = (
+            f"Expected one row per IDP but found {len(df)}."
+        )
+
+        if strict:
+            raise ValueError(
+                f"Expected one row in {path}, found {len(df)}."
+            )
+
+        # Keep all rows in non-strict mode but flag the issue.
+
+    df["IDP"] = df["IDP"].astype(str)
+
+    audit["IDP_in_file"] = ";".join(
+        sorted(df["IDP"].dropna().unique())
+    )
+
+    expected_idp = audit["expected_IDP_from_filename"]
+
+    mismatch = (
+        expected_idp
+        and not all(df["IDP"] == expected_idp)
+    )
+
+    if mismatch:
+        audit["status"] = "idp_filename_mismatch"
+        audit["message"] = (
+            f"Filename implies IDP={expected_idp}; "
+            f"file contains {audit['IDP_in_file']}."
+        )
+
+        if strict:
+            raise ValueError(
+                f"IDP mismatch in {path}: {audit['message']}"
+            )
+    else:
+        audit["status"] = (
+            "ok"
+            if len(df) == 1
+            else "unexpected_row_count"
+        )
+
+    # Add collection metadata while preserving every original R output column.
+    df.insert(
+        0,
+        "Modality",
+        modality,
+    )
+
+    df.insert(
+        1,
+        "Organ",
+        MODALITY_LABELS[modality],
+    )
+
+    df.insert(
+        2,
+        "Feature_family",
+        [
+            infer_feature_family(
+                modality,
+                x,
+            )
+            for x in df["IDP"]
+        ],
+    )
+
+    df.insert(
+        3,
+        "source_file",
+        str(path),
+    )
+
+    df.insert(
+        4,
+        "collection_status",
+        audit["status"],
+    )
+
+    return df, audit
+
+
+# =============================================================================
+# RESULT ANNOTATION
+# =============================================================================
+
+def coerce_result_types(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+
+    numeric_cols = [
+        "Beta_log_odds_per_1SD_IDP",
+        "SE",
+        "Z",
+        "P_value",
+        "OR_per_1SD_IDP",
+        "OR_CI95_lower",
+        "OR_CI95_upper",
+        "N_case",
+        "N_control",
+        "N_total",
+        "N_case_in_phenotype_file",
+        "N_control_in_phenotype_file",
+        "N_after_merge",
+        "N_complete_before_outlier_filter",
+        "N_IDP_outliers_removed",
+        "IDP_outlier_SD_threshold",
+        "IDP_mean_before_outlier_filter",
+        "IDP_SD_before_outlier_filter",
+        "IDP_mean_analysis_sample",
+        "IDP_SD_analysis_sample",
+        "AIC",
+    ]
+
+    for col in numeric_cols:
+        if col in out.columns:
+            out[col] = pd.to_numeric(
+                out[col],
+                errors="coerce",
+            )
+
+    return out
+
+
+def add_within_modality_multiple_testing(
+    df: pd.DataFrame,
+    alpha: float,
+) -> pd.DataFrame:
+    out = df.copy()
+
+    out["P_value_FDR_BH_within_modality"] = np.nan
+    out["P_value_Bonferroni_within_modality"] = np.nan
+    out["N_tests_within_modality"] = np.nan
+
+    for modality, idx in out.groupby(
+        "Modality",
+        sort=False,
+    ).groups.items():
+
+        idx = list(idx)
+
+        p = pd.to_numeric(
+            out.loc[idx, "P_value"],
+            errors="coerce",
+        ).to_numpy()
+
+        valid_n = int(
+            (
+                np.isfinite(p)
+                & (p >= 0)
+                & (p <= 1)
+            ).sum()
+        )
+
+        out.loc[
+            idx,
+            "P_value_FDR_BH_within_modality",
+        ] = bh_fdr(p)
+
+        out.loc[
+            idx,
+            "P_value_Bonferroni_within_modality",
+        ] = bonferroni(p)
+
+        out.loc[
+            idx,
+            "N_tests_within_modality",
+        ] = valid_n
+
+    out["FDR_BH_lt_0.05_within_modality"] = (
+        out["P_value_FDR_BH_within_modality"]
+        < alpha
+    )
+
+    out["Bonferroni_lt_0.05_within_modality"] = (
+        out["P_value_Bonferroni_within_modality"]
+        < alpha
+    )
+
+    return out
+
+
+def add_global_multiple_testing(
+    df: pd.DataFrame,
+    alpha: float,
+) -> pd.DataFrame:
+    out = df.copy()
+
+    p = pd.to_numeric(
+        out["P_value"],
+        errors="coerce",
+    ).to_numpy()
+
+    valid_n = int(
+        (
+            np.isfinite(p)
+            & (p >= 0)
+            & (p <= 1)
+        ).sum()
+    )
+
+    out["P_value_FDR_BH_all_modalities"] = bh_fdr(p)
+    out["P_value_Bonferroni_all_modalities"] = bonferroni(p)
+
+    out["FDR_BH_lt_0.05_all_modalities"] = (
+        out["P_value_FDR_BH_all_modalities"]
+        < alpha
+    )
+
+    out["Bonferroni_lt_0.05_all_modalities"] = (
+        out["P_value_Bonferroni_all_modalities"]
+        < alpha
+    )
+
+    out["N_tests_all_modalities"] = valid_n
+
+    return out
+
+
+def annotate_results(
+    df: pd.DataFrame,
+    alpha: float,
+) -> pd.DataFrame:
+    out = coerce_result_types(df)
+
+    out["Beta_direction"] = [
+        beta_direction(x)
+        for x in out[
+            "Beta_log_odds_per_1SD_IDP"
+        ].to_numpy(dtype=float)
+    ]
+
+    out["Nominal_P_lt_0.05"] = (
+        out["P_value"] < alpha
+    )
+
+    out = add_within_modality_multiple_testing(
+        out,
+        alpha=alpha,
+    )
+
+    out = add_global_multiple_testing(
+        out,
+        alpha=alpha,
+    )
+
+    return out
+
+
+def reorder_columns(df: pd.DataFrame) -> pd.DataFrame:
+    preferred = [
+        c for c in PREFERRED_COLUMN_ORDER
+        if c in df.columns
+    ]
+
+    remaining = [
+        c for c in df.columns
+        if c not in preferred
+    ]
+
+    return df[
+        preferred + remaining
+    ]
+
+
+# =============================================================================
+# SUMMARY TABLES
+# =============================================================================
+
+def make_modality_summary(
+    df: pd.DataFrame,
+    audit_df: pd.DataFrame,
+    expected_counts: Dict[str, Optional[int]],
+    alpha: float,
+) -> pd.DataFrame:
+
+    rows = []
+
+    for modality in MODALITY_DIRS:
+
+        sub = df[
+            df["Modality"] == modality
+        ].copy()
+
+        audit_sub = audit_df[
+            audit_df["Modality"] == modality
+        ].copy()
+
+        expected_n = expected_counts.get(
+            modality
+        )
+
+        n_files_discovered = len(
+            audit_sub
+        )
+
+        n_valid_files = int(
+            audit_sub["status"].isin(
+                [
+                    "ok",
+                    "unexpected_row_count",
+                    "idp_filename_mismatch",
+                ]
+            ).sum()
+        ) if len(audit_sub) else 0
+
+        n_results = len(sub)
+
+        if n_results:
+            p_numeric = pd.to_numeric(
+                sub["P_value"],
+                errors="coerce",
+            )
+
+            best_idx = p_numeric.idxmin()
+
+            best_idp = sub.loc[
+                best_idx,
+                "IDP",
+            ]
+
+            best_p = sub.loc[
+                best_idx,
+                "P_value",
+            ]
+
+            best_beta = sub.loc[
+                best_idx,
+                "Beta_log_odds_per_1SD_IDP",
+            ]
+
+            best_or = sub.loc[
+                best_idx,
+                "OR_per_1SD_IDP",
+            ]
+
+            n_nominal = int(
+                sub["Nominal_P_lt_0.05"].sum()
+            )
+
+            n_fdr_modality = int(
+                sub[
+                    "FDR_BH_lt_0.05_within_modality"
+                ].sum()
+            )
+
+            n_fdr_global = int(
+                sub[
+                    "FDR_BH_lt_0.05_all_modalities"
+                ].sum()
+            )
+
+            n_positive_beta = int(
+                (
+                    sub[
+                        "Beta_log_odds_per_1SD_IDP"
+                    ] > 0
+                ).sum()
+            )
+
+            n_negative_beta = int(
+                (
+                    sub[
+                        "Beta_log_odds_per_1SD_IDP"
+                    ] < 0
+                ).sum()
+            )
+
+        else:
+            best_idp = ""
+            best_p = np.nan
+            best_beta = np.nan
+            best_or = np.nan
+            n_nominal = 0
+            n_fdr_modality = 0
+            n_fdr_global = 0
+            n_positive_beta = 0
+            n_negative_beta = 0
+
+        rows.append(
+            {
+                "Modality": modality,
+                "Organ": MODALITY_LABELS[modality],
+                "Expected_N_features": expected_n,
+                "N_result_files_discovered": n_files_discovered,
+                "N_valid_result_files": n_valid_files,
+                "N_result_rows_collected": n_results,
+                "Expected_count_difference": (
+                    np.nan
+                    if expected_n is None
+                    else n_results - expected_n
+                ),
+                "N_nominal_P_lt_alpha": n_nominal,
+                "N_FDR_lt_alpha_within_modality": n_fdr_modality,
+                "N_FDR_lt_alpha_all_modalities": n_fdr_global,
+                "N_positive_beta_CRA_direction": n_positive_beta,
+                "N_negative_beta_CUA_direction": n_negative_beta,
+                "Best_IDP": best_idp,
+                "Best_P_value": best_p,
+                "Best_Beta": best_beta,
+                "Best_OR": best_or,
+                "alpha": alpha,
+            }
+        )
+
+    return pd.DataFrame(
+        rows
+    )
+
+
+# =============================================================================
+# MAIN
+# =============================================================================
+
+def main() -> None:
+    args = parse_args()
+
+    if not (
+        0 < args.alpha < 1
+    ):
+        raise ValueError(
+            "--alpha must be between 0 and 1."
+        )
+
+    analysis_root = args.analysis_root.expanduser()
+
+    output_dir = (
+        args.output_dir.expanduser()
+        if args.output_dir is not None
+        else analysis_root / "combined_results"
+    )
+
+    output_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    expected_counts: Dict[str, Optional[int]] = {
+        "DTI": args.expected_dti,
+        "T1": args.expected_t1,
+        "FC": args.expected_fc,
+    }
+
+    print(
+        "============================================================"
+    )
+    print(
+        "Collect CRA-vs-CUA brain imaging association results"
+    )
+    print(
+        "============================================================"
+    )
+    print(
+        f"Analysis root: {analysis_root}"
+    )
+    print(
+        f"Output dir:    {output_dir}"
+    )
+    print()
+
+    collected: List[pd.DataFrame] = []
+    audit_rows: List[dict] = []
+
+    # -------------------------------------------------------------------------
+    # Discover and read all modality results.
+    # -------------------------------------------------------------------------
+    for modality, dirname in MODALITY_DIRS.items():
+
+        modality_dir = (
+            analysis_root / dirname
+        )
+
+        files = discover_result_files(
+            modality_dir
+        )
+
+        print(
+            f"{modality}: {len(files)} result file(s) discovered in"
+        )
+        print(
+            f"  {modality_dir}"
+        )
+
+        if len(files) == 0:
+            audit_rows.append(
+                {
+                    "Modality": modality,
+                    "source_file": "",
+                    "filename": "",
+                    "expected_IDP_from_filename": "",
+                    "status": "no_result_files_found",
+                    "message": (
+                        f"No files matching "
+                        f"{RESULT_PREFIX}*{RESULT_SUFFIX}"
+                    ),
+                    "N_rows_in_file": np.nan,
+                    "IDP_in_file": "",
+                }
+            )
+            continue
+
+        for path in files:
+
+            df_one, audit = read_one_result(
+                path=path,
+                modality=modality,
+                strict=args.strict,
+            )
+
+            audit_rows.append(
+                audit
+            )
+
+            if df_one is not None:
+                collected.append(
+                    df_one
+                )
+
+    audit_df = pd.DataFrame(
+        audit_rows
+    )
+
+    audit_path = (
+        output_dir
+        / "BWAS_CRA_vs_CUA_collection_audit.tsv"
+    )
+
+    audit_df.to_csv(
+        audit_path,
+        sep="\t",
+        index=False,
+        na_rep="NA",
+    )
+
+    if len(collected) == 0:
+        print()
+        print(
+            "No valid result rows were collected."
+        )
+        print(
+            f"Audit written to: {audit_path}"
+        )
+        sys.exit(1)
+
+    # -------------------------------------------------------------------------
+    # Combine and annotate.
+    # -------------------------------------------------------------------------
+    combined = pd.concat(
+        collected,
+        ignore_index=True,
+        sort=False,
+    )
+
+    combined = annotate_results(
+        combined,
+        alpha=args.alpha,
+    )
+
+    combined = reorder_columns(
+        combined
+    )
+
+    # Sort by modality then P-value while preserving all statistics.
+    modality_order = {
+        "DTI": 0,
+        "T1": 1,
+        "FC": 2,
+    }
+
+    combined["_modality_order"] = combined[
+        "Modality"
+    ].map(
+        modality_order
+    )
+
+    combined = combined.sort_values(
+        by=[
+            "_modality_order",
+            "P_value",
+            "IDP",
+        ],
+        ascending=[
+            True,
+            True,
+            True,
+        ],
+        kind="mergesort",
+        na_position="last",
+    ).drop(
+        columns="_modality_order"
+    ).reset_index(
+        drop=True
+    )
+
+    # -------------------------------------------------------------------------
+    # Per-modality outputs.
+    # -------------------------------------------------------------------------
+    for modality in MODALITY_DIRS:
+
+        sub = combined[
+            combined["Modality"] == modality
+        ].copy()
+
+        out_path = (
+            output_dir
+            / f"BWAS_CRA_vs_CUA_{modality}_all_statistics.tsv"
+        )
+
+        sub.to_csv(
+            out_path,
+            sep="\t",
+            index=False,
+            na_rep="NA",
+        )
+
+        print(
+            f"Wrote {modality}: {len(sub)} row(s)"
+        )
+        print(
+            f"  {out_path}"
+        )
+
+    # -------------------------------------------------------------------------
+    # Combined detailed output.
+    # -------------------------------------------------------------------------
+    combined_path = (
+        output_dir
+        / "BWAS_CRA_vs_CUA_all_modalities_all_statistics.tsv"
+    )
+
+    combined.to_csv(
+        combined_path,
+        sep="\t",
+        index=False,
+        na_rep="NA",
+    )
+
+    # -------------------------------------------------------------------------
+    # Significant / nominal subsets.
+    # -------------------------------------------------------------------------
+    nominal = combined[
+        combined[
+            "Nominal_P_lt_0.05"
+        ].fillna(False)
+    ].copy()
+
+    fdr_modality = combined[
+        combined[
+            "FDR_BH_lt_0.05_within_modality"
+        ].fillna(False)
+    ].copy()
+
+    fdr_global = combined[
+        combined[
+            "FDR_BH_lt_0.05_all_modalities"
+        ].fillna(False)
+    ].copy()
+
+    nominal.to_csv(
+        output_dir
+        / "BWAS_CRA_vs_CUA_nominal_P_lt_0.05.tsv",
+        sep="\t",
+        index=False,
+        na_rep="NA",
+    )
+
+    fdr_modality.to_csv(
+        output_dir
+        / "BWAS_CRA_vs_CUA_FDR_lt_0.05_within_modality.tsv",
+        sep="\t",
+        index=False,
+        na_rep="NA",
+    )
+
+    fdr_global.to_csv(
+        output_dir
+        / "BWAS_CRA_vs_CUA_FDR_lt_0.05_all_modalities.tsv",
+        sep="\t",
+        index=False,
+        na_rep="NA",
+    )
+
+    # -------------------------------------------------------------------------
+    # Modality summary.
+    # -------------------------------------------------------------------------
+    modality_summary = make_modality_summary(
+        df=combined,
+        audit_df=audit_df,
+        expected_counts=expected_counts,
+        alpha=args.alpha,
+    )
+
+    summary_path = (
+        output_dir
+        / "BWAS_CRA_vs_CUA_modality_summary.tsv"
+    )
+
+    modality_summary.to_csv(
+        summary_path,
+        sep="\t",
+        index=False,
+        na_rep="NA",
+    )
+
+    # -------------------------------------------------------------------------
+    # Console summary.
+    # -------------------------------------------------------------------------
+    print()
+    print(
+        "============================================================"
+    )
+    print(
+        "Collection complete"
+    )
+    print(
+        "============================================================"
+    )
+
+    print(
+        f"Total association rows: {len(combined)}"
+    )
+
+    print(
+        f"Nominal P < {args.alpha}: "
+        f"{int(combined['Nominal_P_lt_0.05'].sum())}"
+    )
+
+    print(
+        f"BH-FDR < {args.alpha} within modality: "
+        f"{int(combined['FDR_BH_lt_0.05_within_modality'].sum())}"
+    )
+
+    print(
+        f"BH-FDR < {args.alpha} across all modalities: "
+        f"{int(combined['FDR_BH_lt_0.05_all_modalities'].sum())}"
+    )
+
+    print()
+
+    with pd.option_context(
+        "display.max_columns",
+        None,
+        "display.width",
+        220,
+    ):
+        print(
+            modality_summary.to_string(
+                index=False
+            )
+        )
+
+    print()
+    print(
+        "Main combined detailed file:"
+    )
+    print(
+        f"  {combined_path}"
+    )
+
+    print(
+        "Collection audit:"
+    )
+    print(
+        f"  {audit_path}"
+    )
+
+    print(
+        "Modality summary:"
+    )
+    print(
+        f"  {summary_path}"
+    )
+
+
+if __name__ == "__main__":
+    main()
