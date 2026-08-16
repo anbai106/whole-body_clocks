@@ -6,7 +6,7 @@
 #   Panel A: Hazard ratios (95% CI) for all-cause mortality
 #   Panel B: Incremental discrimination (Delta C-index)
 #
-# Stroke hepatic-proteomics EPOCH vs 10 conventional mortality biomarkers
+# MI immune-metabolomics EPOCH vs 10 conventional mortality biomarkers
 #
 # All predictors come from the same strict apple-to-apple analysis sample.
 #
@@ -17,9 +17,9 @@
 # to Panel B as horizontal error bars.
 #
 # Outputs:
-#   stroke_hepatic_proteomics_EPOCH_vs_10_biomarkers_combined_AB.pdf
-#   stroke_hepatic_proteomics_EPOCH_vs_10_biomarkers_combined_AB.png
-#   stroke_hepatic_proteomics_EPOCH_vs_10_biomarkers_combined_plot_data.tsv
+#   mi_immune_metabolomics_EPOCH_vs_10_biomarkers_combined_AB.pdf
+#   mi_immune_metabolomics_EPOCH_vs_10_biomarkers_combined_AB.png
+#   mi_immune_metabolomics_EPOCH_vs_10_biomarkers_combined_plot_data.tsv
 # ==============================================================================
 
 suppressPackageStartupMessages({
@@ -37,25 +37,25 @@ suppressPackageStartupMessages({
 input_file <- paste0(
   "/Users/hao/cubic-home/Reproducibile_paper/WholeBodyClock/",
   "comparative_with_10_conventional_biomarkers/",
-  "2_mortality_comparison_stroke_hepatic_proteomics/",
-  "stroke_hepatic_proteomics_EPOCH_vs_10_biomarkers_mortality_summary.tsv"
+  "2_mortality_comparison_mi_immune_metabolomics/",
+  "mi_immune_metabolomics_EPOCH_vs_10_biomarkers_mortality_summary.tsv"
 )
 
 output_dir <- dirname(input_file)
 
 pdf_file <- file.path(
   output_dir,
-  "stroke_hepatic_proteomics_EPOCH_vs_10_biomarkers_combined_AB.pdf"
+  "mi_immune_metabolomics_EPOCH_vs_10_biomarkers_combined_AB.pdf"
 )
 
 png_file <- file.path(
   output_dir,
-  "stroke_hepatic_proteomics_EPOCH_vs_10_biomarkers_combined_AB.png"
+  "mi_immune_metabolomics_EPOCH_vs_10_biomarkers_combined_AB.png"
 )
 
 plot_data_file <- file.path(
   output_dir,
-  "stroke_hepatic_proteomics_EPOCH_vs_10_biomarkers_combined_plot_data.tsv"
+  "mi_immune_metabolomics_EPOCH_vs_10_biomarkers_combined_plot_data.tsv"
 )
 
 # ------------------------------------------------------------------------------
@@ -123,9 +123,11 @@ plot_dat <- dat %>%
     cindex_baseline_plus_predictor = as.numeric(cindex_baseline_plus_predictor),
     delta_cindex_vs_baseline = as.numeric(delta_cindex_vs_baseline),
     
+    # Standardize the EPOCH display label regardless of the exact predictor
+    # string written by the Python survival script.
     predictor_plot = case_when(
-      predictor == "Stroke hepatic-proteomics EPOCH" ~
-        "Stroke hepatic-proteomics EPOCH",
+      predictor_type == "EPOCH" ~
+        "MI immune-metabolomics EPOCH",
       predictor == "C-reactive protein (log1p)" ~
         "C-reactive protein",
       TRUE ~ predictor
@@ -202,9 +204,6 @@ subtitle_text <- paste0(
 # 5. Van Gogh-inspired palette and shapes
 # ------------------------------------------------------------------------------
 
-# Van Gogh-inspired "Starry Night" palette:
-#   EPOCH: warm sunflower / golden yellow
-#   Conventional biomarkers: deep night-sky blue
 epoch_color <- "#E0A526"
 biomarker_color <- "#345995"
 
@@ -213,10 +212,9 @@ group_colors <- c(
   "Conventional biomarker" = biomarker_color
 )
 
-# Different symbols make the distinction visible even in grayscale.
 group_shapes <- c(
-  "EPOCH" = 18,                  # diamond
-  "Conventional biomarker" = 16 # circle
+  "EPOCH" = 18,
+  "Conventional biomarker" = 16
 )
 
 # ------------------------------------------------------------------------------
@@ -260,13 +258,25 @@ common_theme <- theme_classic(base_size = 12) +
 # 7. Panel A: HR forest plot
 # ------------------------------------------------------------------------------
 
-# Determine robust HR-axis limits from the actual confidence intervals.
 hr_lower <- min(plot_dat$hr_ci_lower, na.rm = TRUE)
 hr_upper <- max(plot_dat$hr_ci_upper, na.rm = TRUE)
 
-# Add modest padding on the log scale.
 hr_xlim_lower <- exp(log(hr_lower) - 0.08)
 hr_xlim_upper <- exp(log(hr_upper) + 0.08)
+
+candidate_hr_breaks <- c(
+  0.50, 0.60, 0.70, 0.75, 0.80, 0.90,
+  1.00, 1.10, 1.20, 1.30, 1.40, 1.50, 1.75, 2.00
+)
+
+hr_breaks <- candidate_hr_breaks[
+  candidate_hr_breaks >= hr_xlim_lower &
+    candidate_hr_breaks <= hr_xlim_upper
+]
+
+if (!any(abs(hr_breaks - 1) < 1e-12)) {
+  hr_breaks <- sort(unique(c(hr_breaks, 1)))
+}
 
 panel_a <- ggplot(
   plot_dat,
@@ -306,10 +316,7 @@ panel_a <- ggplot(
   ) +
   scale_x_log10(
     limits = c(hr_xlim_lower, hr_xlim_upper),
-    breaks = c(
-      0.75, 0.80, 0.90, 1.00,
-      1.10, 1.20, 1.30, 1.40, 1.50
-    ),
+    breaks = hr_breaks,
     labels = label_number(accuracy = 0.01)
   ) +
   labs(
@@ -326,15 +333,18 @@ panel_a <- ggplot(
 # 8. Panel B: Delta C-index forest-style plot
 # ------------------------------------------------------------------------------
 
-# No CI for Delta C-index is available in the current summary TSV.
-# The panel therefore shows point estimates with a reference line at zero.
-
 max_delta <- max(plot_dat$delta_cindex_vs_baseline, na.rm = TRUE)
 min_delta <- min(plot_dat$delta_cindex_vs_baseline, na.rm = TRUE)
 
-delta_pad <- max(0.0015, 0.08 * (max_delta - min_delta))
+delta_range <- max_delta - min_delta
+
+if (!is.finite(delta_range) || delta_range == 0) {
+  delta_range <- max(abs(max_delta), 0.001)
+}
+
+delta_pad <- max(0.0015, 0.08 * delta_range)
 delta_lower <- min(0, min_delta) - delta_pad
-delta_upper <- max_delta + delta_pad
+delta_upper <- max(0, max_delta) + delta_pad
 
 panel_b <- ggplot(
   plot_dat,
@@ -395,7 +405,6 @@ panel_b <- ggplot(
   ) +
   common_theme +
   theme(
-    # The predictor labels are already displayed in Panel A.
     axis.text.y = element_blank(),
     axis.ticks.y = element_blank(),
     axis.line.y = element_blank()
@@ -414,7 +423,7 @@ combined_plot <- (
 ) +
   plot_annotation(
     title = paste0(
-      "Stroke hepatic-proteomics EPOCH versus conventional biomarkers ",
+      "MI immune-metabolomics EPOCH versus conventional biomarkers ",
       "for all-cause mortality"
     ),
     tag_levels = "A",
@@ -462,7 +471,7 @@ ggsave(
 # ------------------------------------------------------------------------------
 
 cat("\n============================================================\n")
-cat("Combined Panels A-B completed\n")
+cat("MI immune-metabolomics combined Panels A-B completed\n")
 cat("============================================================\n")
 cat("Input:\n  ", input_file, "\n", sep = "")
 cat("Analysis N: ", format(analysis_n, big.mark = ","), "\n", sep = "")
@@ -498,6 +507,6 @@ print(
   n = Inf
 )
 
-cat("\nNOTE: Panel B currently displays Delta C-index point estimates only.\n")
+cat("\nNOTE: Panel B displays Delta C-index point estimates only.\n")
 cat("Bootstrap confidence intervals can be added when available.\n")
 cat("============================================================\n")
