@@ -16,7 +16,7 @@ The script is intended for the two analyses requested here:
 
 Key design features
 -------------------
-1. Use the held-out brain-proteomics mortality-EPOCH test predictions by default.
+1. Use the full brain-proteomics mortality-EPOCH prediction file by default (train + validation + test) to maximize the disease-onset sample size.
 2. Use the EPOCH acceleration z-score, not the raw mortality risk score.
 3. Define time zero as the baseline sample/assessment date used by the EPOCH.
 4. Exclude disease onset on/before baseline.
@@ -267,7 +267,7 @@ def resolve_epoch_column(columns, override=None):
     )
 
 
-def read_epoch_predictions(path, epoch_col_override=None, analysis_split="test"):
+def read_epoch_predictions(path, epoch_col_override=None, analysis_split="all"):
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(str(path))
@@ -295,9 +295,13 @@ def read_epoch_predictions(path, epoch_col_override=None, analysis_split="test")
         df = df.loc[df["split"].astype(str).str.lower() == "test"].copy()
         info("Filtered EPOCH predictions to held-out test split: {:,} -> {:,}".format(before, len(df)))
     elif analysis_split == "test" and "split" not in df.columns:
-        info("EPOCH file has no split column; treating all rows as the requested test sample.")
+        raise ValueError(
+            "--analysis-split test was requested, but the EPOCH prediction file has no 'split' column. "
+            "Use brain_proteomics_mortality_clock_predictions.tsv, which contains the split column, "
+            "or run with --analysis-split all."
+        )
     else:
-        info("Using all available EPOCH predictions: N={:,}".format(len(df)))
+        info("Using FULL available EPOCH prediction sample (train + validation + test): N={:,}".format(len(df)))
 
     df = df.rename(columns={epoch_col: "epoch_raw"})
     df["epoch_raw"] = pd.to_numeric(df["epoch_raw"], errors="coerce")
@@ -952,8 +956,8 @@ def paired_bootstrap_delta_cindex(time, event, risk_a, risk_b, label_a, label_b,
 def run(args):
     outdir = Path(args.output_dir).resolve()
     outdir.mkdir(parents=True, exist_ok=True)
-    prefix = "brain_proteomics_mortality_EPOCH_vs_10_biomarkers_{}_disease_onset".format(
-        clean_col_name(args.disease_code)
+    prefix = "brain_proteomics_mortality_EPOCH_vs_10_biomarkers_{}_{}_disease_onset".format(
+        clean_col_name(args.disease_code), clean_col_name(args.analysis_split)
     )
 
     summary_out = outdir / "{}_individual_predictor_summary.tsv".format(prefix)
@@ -1447,7 +1451,8 @@ def run(args):
         ("baseline_penalizer_used", base_pen),
         ("common_sample_rule", "complete Brain EPOCH + all 10 conventional biomarkers + valid disease follow-up"),
         ("blood_pressure_covariates_in_default_baseline", "No; systolic BP is a benchmark predictor"),
-        ("primary_comparison_population", "held-out mortality-EPOCH test split" if args.analysis_split == "test" else "all EPOCH participants"),
+        ("primary_comparison_population", "held-out mortality-EPOCH test split" if args.analysis_split == "test" else "full EPOCH sample: mortality-clock train + validation + test participants"),
+        ("out_of_sample_interpretation", "Yes: held-out from mortality-EPOCH development" if args.analysis_split == "test" else "No: full-sample analysis includes mortality-EPOCH development participants; use for maximum-power association/incremental comparison"),
     ]
     for c in biomarker_cols:
         qc_rows.append(("source_{}".format(c), biomarker_sources[c]))
@@ -1471,12 +1476,18 @@ def main():
     p = argparse.ArgumentParser(
         description=(
             "Compare brain proteomics mortality EPOCH with 10 conventional biomarkers "
-            "for incident disease onset in one identical held-out population."
+            "for incident disease onset in one identical comparison population. Full sample is the default to maximize N."
         )
     )
     p.add_argument("--epoch-predictions", required=True)
     p.add_argument("--epoch-col", default=None)
-    p.add_argument("--analysis-split", choices=["test", "all"], default="test")
+    p.add_argument(
+        "--analysis-split", choices=["test", "all"], default="all",
+        help=(
+            "Default 'all' uses train + validation + test participants from the full EPOCH predictions file "
+            "to maximize sample size. Use 'test' for a held-out sensitivity analysis."
+        ),
+    )
 
     p.add_argument("--disease-tsv", required=True)
     p.add_argument("--disease-code", required=True)

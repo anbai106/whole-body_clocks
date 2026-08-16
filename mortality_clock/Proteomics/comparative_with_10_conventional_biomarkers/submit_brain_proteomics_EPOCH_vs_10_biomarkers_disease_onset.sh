@@ -15,7 +15,7 @@
 #   0 = G309 = Alzheimer's disease (G30.9)
 #   1 = I500 = heart failure (I50.0)
 #
-# Primary analysis uses the held-out mortality-EPOCH TEST predictions.
+# Primary analysis uses the FULL mortality-EPOCH prediction sample (train + validation + test) to maximize sample size.
 # Every comparison within a disease uses ONE identical sample complete for:
 #   Brain proteomics mortality EPOCH + all 10 biomarkers + valid disease follow-up.
 #
@@ -34,13 +34,15 @@ BASE_DIR="${BASE_DIR:-/cbica/home/wenju/Reproducibile_paper/WholeBodyClock}"
 EPOCH_DIR="${EPOCH_DIR:-${BASE_DIR}/Brain_proteomics_mortality_clock}"
 DISEASE_DIR="${DISEASE_DIR:-${BASE_DIR}/mortality_clock/SA/data}"
 
-# Primary: held-out test predictions. For sensitivity analysis, point this to
-# brain_proteomics_mortality_clock_predictions.tsv and set ANALYSIS_SPLIT=all.
-EPOCH_PREDICTIONS="${EPOCH_PREDICTIONS:-${EPOCH_DIR}/brain_proteomics_mortality_clock_test_predictions.tsv}"
-ANALYSIS_SPLIT="${ANALYSIS_SPLIT:-test}"
+# Primary/default: full prediction table, which contains train/validation/test rows
+# plus the EPOCH acceleration-z column. For a held-out sensitivity analysis,
+# keep this same full file and submit with ANALYSIS_SPLIT=test.
+EPOCH_PREDICTIONS="${EPOCH_PREDICTIONS:-${EPOCH_DIR}/brain_proteomics_mortality_clock_predictions.tsv}"
+ANALYSIS_SPLIT="${ANALYSIS_SPLIT:-all}"
 
-# Optional exact EPOCH acceleration-z column. Leave empty for robust auto-detection.
-EPOCH_COL="${EPOCH_COL:-}"
+# Exact EPOCH acceleration-z column present in the full prediction table.
+# Set explicitly by default so the raw Cox mortality risk score is never selected by mistake.
+EPOCH_COL="${EPOCH_COL:-brain_proteomics_mortality_clock_acceleration_z}"
 
 DEATH_XLSX="${DEATH_XLSX:-/cbica/home/wenju/Dataset/UKBB_UMelbourne/Death_related_var_from_Ye.xlsx}"
 ID_MATCH_CSV="${ID_MATCH_CSV:-/cbica/home/wenju/Dataset/UKBB_UMelbourne/UKB_UMelbourne_vs_Penn_match_key.csv}"
@@ -84,11 +86,11 @@ fi
 DISEASE_CODE="${codes[$idx]}"
 DISEASE_LABEL="${labels[$idx]}"
 DISEASE_TSV="${files[$idx]}"
-OUTPUT_DIR="${OUTPUT_ROOT}/${DISEASE_CODE}"
+OUTPUT_DIR="${OUTPUT_ROOT}/${ANALYSIS_SPLIT}/${DISEASE_CODE}"
 mkdir -p /cbica/home/wenju/output
 mkdir -p "${OUTPUT_DIR}"
 
-prefix="brain_proteomics_mortality_EPOCH_vs_10_biomarkers_${DISEASE_CODE,,}_disease_onset"
+prefix="brain_proteomics_mortality_EPOCH_vs_10_biomarkers_${DISEASE_CODE,,}_${ANALYSIS_SPLIT}_disease_onset"
 EXPECTED_SUMMARY="${OUTPUT_DIR}/${prefix}_individual_predictor_summary.tsv"
 
 required_files=(
@@ -136,6 +138,12 @@ echo "SLURM_JOB_ID: ${SLURM_JOB_ID}"
 echo "SLURM_ARRAY_TASK_ID: ${SLURM_ARRAY_TASK_ID}"
 echo "EPOCH predictions: ${EPOCH_PREDICTIONS}"
 echo "Analysis split: ${ANALYSIS_SPLIT}"
+if [[ "${ANALYSIS_SPLIT}" == "all" ]]; then
+  echo "Population note: FULL mortality-EPOCH sample (train + validation + test); not a strictly held-out validation."
+else
+  echo "Population note: held-out mortality-EPOCH test split sensitivity analysis."
+fi
+echo "EPOCH column: ${EPOCH_COL}"
 echo "Disease TSV: ${DISEASE_TSV}"
 echo "Output directory: ${OUTPUT_DIR}"
 echo "Started at: $(date)"
