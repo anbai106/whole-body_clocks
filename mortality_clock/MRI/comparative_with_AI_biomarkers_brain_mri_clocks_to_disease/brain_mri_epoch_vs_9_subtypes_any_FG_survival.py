@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Fair survival comparison: brain MRI mortality EPOCH vs 9 AI disease subtypes.
 
+BUGFIX VERSION: robust nullable-boolean handling in F/G endpoint construction.
+
 Endpoint: first recorded inpatient ICD-10 F* or G* diagnosis after the brain MRI
 visit, among participants with no valid F/G diagnosis on or before that visit.
 Primary analysis uses the held-out EPOCH test split and one strict common
@@ -72,6 +74,28 @@ def parse_date(x):
         excel = pd.to_datetime(num, unit="D", origin="1899-12-30", errors="coerce")
         out = out.where(~mask, excel)
     return out
+
+
+def bool_numpy(mask):
+    """Return a strict NumPy bool array from pandas/NumPy nullable masks.
+
+    Pandas nullable boolean/string operations can produce object-dtype arrays
+    after to_numpy(). Missing values are treated as False so NumPy in-place
+    logical operations such as |= are always type-safe.
+    """
+    if isinstance(mask, pd.Series):
+        return mask.fillna(False).astype(bool).to_numpy(dtype=bool)
+
+    arr = np.asarray(mask)
+    if arr.dtype == bool:
+        return arr
+
+    return (
+        pd.Series(arr)
+        .fillna(False)
+        .astype(bool)
+        .to_numpy(dtype=bool)
+    )
 
 
 def read_epoch(args):
@@ -189,52 +213,215 @@ def read_icd_dates(args, ids):
 
 
 def derive_fg_endpoint(base, diag, code_cols, dates, allow_unresolved):
-    x = base.merge(diag, on="participant_id", how="left").merge(dates, on="participant_id", how="left")
-    earliest = pd.Series(pd.NaT, index=x.index, dtype="datetime64[ns]")
-    earliest_code = pd.Series(pd.NA, index=x.index, dtype="string")
+    """Construct the first incident ICD-10 F/G endpoint after brain MRI.
+
+    Bug fix:
+    pandas string operations may return nullable BooleanDtype masks. Plain
+    .to_numpy() can then yield dtype=object, which causes NumPy UFuncTypeError
+    during in-place operations against dtype=bool arrays. Every mask used in
+    NumPy logical operations is explicitly converted with bool_numpy().
+    """
+    x = (
+        base
+        .merge(diag, on="participant_id", how="left")
+        .merge(dates, on="participant_id", how="left")
+    )
+
+    earliest = pd.Series(
+        pd.NaT,
+        index=x.index,
+        dtype="datetime64[ns]",
+    )
+    earliest_code = pd.Series(
+        pd.NA,
+        index=x.index,
+        dtype="string",
+    )
+
     fg_count = np.zeros(len(x), dtype=np.int32)
     unresolved = np.zeros(len(x), dtype=bool)
+
     matched_slots = 0
+    unmatched_slots = 0
+
     for col in code_cols:
-        suffix = col.replace("diagnoses_icd10_f41270_", "")
-        codes = x[col].astype("string").str.upper().str.strip().str.replace(r"[^A-Z0-9\.]", "", regex=True)
-        is_fg = codes.str.match(r"^[FG][0-9]", na=False)
-        if not is_fg.any():
+        suffix = col.replace(
+            "diagnoses_icd10_f41270_",
+            "",
+        )
+
+        codes = (
+            x[col]
+            .astype("string")
+            .str.upper()
+            .str.strip()
+            .str.replace(
+                r"[^A-Z0-9\.]",
+                "",
+                regex=True,
+            )
+        )
+
+        # Critical bug fix: always use a true NumPy bool array here.
+        is_fg_np = bool_numpy(
+            codes.str.match(
+                r"^[FG][0-9]",
+                na=False,
+            )
+        )
+
+        if not is_fg_np.any():
             continue
-        fg_count += is_fg.to_numpy(dtype=np.int32)
+
+        fg_count += is_fg_np.astype(np.int32)
+
+        # A code without its paired date cannot be classified as prevalent
+        # versus incident and is therefore unresolved under the strict default.
         if suffix not in x.columns:
-            unresolved |= is_fg.to_numpy()
+            unresolved |= is_fg_np
+            unmatched_slots += 1
             continue
+
         matched_slots += 1
         dt = parse_date(x[suffix])
-        unresolved |= (is_fg & dt.isna()).to_numpy()
-        valid = is_fg & dt.notna()
-        earlier = valid & (earliest.isna() | (dt < earliest))
+
+        date_missing_np = bool_numpy(dt.isna())
+        date_present_np = bool_numpy(dt.notna())
+
+        unresolved |= (
+            is_fg_np
+            & date_missing_np
+        )
+
+        valid_np = (
+            is_fg_np
+            & date_present_np
+        )
+
+        if not valid_np.any():
+            continue
+
+        valid = pd.Series(
+            valid_np,
+            index=x.index,
+            dtype=bool,
+        )
+
+        earlier = valid & (
+            earliest.isna()
+            | (dt < earliest)
+        )
+
+        earlier = pd.Series(
+            bool_numpy(earlier),
+            index=x.index,
+            dtype=bool,
+        )
+
         earliest.loc[earlier] = dt.loc[earlier]
         earliest_code.loc[earlier] = codes.loc[earlier]
+
     out = base.copy()
+
     out["earliest_FG_date"] = earliest.values
     out["earliest_FG_code"] = earliest_code.values
     out["n_FG_codes_recorded"] = fg_count
     out["has_FG_code_missing_paired_date"] = unresolved
-    out["prevalent_FG_at_imaging"] = out["earliest_FG_date"].notna() & (out["earliest_FG_date"] <= out["imaging_date"])
-    out["exclude_unresolved_FG_date"] = False if allow_unresolved else out["has_FG_code_missing_paired_date"]
-    eligible = ~out["prevalent_FG_at_imaging"] & ~out["exclude_unresolved_FG_date"]
-    out["case"] = (eligible & out["earliest_FG_date"].notna() & (out["earliest_FG_date"] > out["imaging_date"]) & (out["earliest_FG_date"] <= out["censor_date"])).astype(int)
+
+    out["prevalent_FG_at_imaging"] = (
+        out["earliest_FG_date"].notna()
+        & (
+            out["earliest_FG_date"]
+            <= out["imaging_date"]
+        )
+    )
+
+    if allow_unresolved:
+        out["exclude_unresolved_FG_date"] = False
+    else:
+        out["exclude_unresolved_FG_date"] = (
+            out["has_FG_code_missing_paired_date"]
+            .astype(bool)
+        )
+
+    eligible = (
+        ~out["prevalent_FG_at_imaging"].astype(bool)
+        & ~out["exclude_unresolved_FG_date"].astype(bool)
+    )
+
+    out["case"] = (
+        eligible
+        & out["earliest_FG_date"].notna()
+        & (
+            out["earliest_FG_date"]
+            > out["imaging_date"]
+        )
+        & (
+            out["earliest_FG_date"]
+            <= out["censor_date"]
+        )
+    ).astype(int)
+
     out["analysis_end_date"] = out["censor_date"]
-    out.loc[out["case"].eq(1), "analysis_end_date"] = out.loc[out["case"].eq(1), "earliest_FG_date"]
-    out["time_years"] = (out["analysis_end_date"] - out["imaging_date"]).dt.days / 365.25
+
+    case_mask = out["case"].eq(1)
+    out.loc[
+        case_mask,
+        "analysis_end_date",
+    ] = out.loc[
+        case_mask,
+        "earliest_FG_date",
+    ]
+
+    out["time_years"] = (
+        (
+            out["analysis_end_date"]
+            - out["imaging_date"]
+        ).dt.days
+        / 365.25
+    )
+
     qc = {
         "icd_41270_slots": len(code_cols),
         "icd_slots_with_matching_41280": matched_slots,
-        "participants_with_any_FG_code": int((out["n_FG_codes_recorded"] > 0).sum()),
-        "participants_with_unresolved_FG_date": int(out["has_FG_code_missing_paired_date"].sum()),
-        "participants_prevalent_FG_at_imaging": int(out["prevalent_FG_at_imaging"].sum()),
-        "incident_FG_events_before_endpoint_filter": int(out["case"].sum()),
+        "icd_slots_without_matching_41280": unmatched_slots,
+        "participants_with_any_FG_code": int(
+            (
+                out["n_FG_codes_recorded"]
+                > 0
+            ).sum()
+        ),
+        "participants_with_unresolved_FG_date": int(
+            out["has_FG_code_missing_paired_date"].sum()
+        ),
+        "participants_prevalent_FG_at_imaging": int(
+            out["prevalent_FG_at_imaging"].sum()
+        ),
+        "incident_FG_events_before_endpoint_filter": int(
+            out["case"].sum()
+        ),
     }
-    out = out[eligible & np.isfinite(out["time_years"]) & (out["time_years"] > 0)].copy()
+
+    time_numeric = pd.to_numeric(
+        out["time_years"],
+        errors="coerce",
+    )
+
+    time_ok = (
+        np.isfinite(time_numeric)
+        & (time_numeric > 0)
+    )
+
+    out = out[
+        eligible
+        & time_ok
+    ].copy()
+
     qc["endpoint_eligible_N"] = len(out)
-    qc["endpoint_eligible_events"] = int(out["case"].sum())
+    qc["endpoint_eligible_events"] = int(
+        out["case"].sum()
+    )
+
     return out, qc
 
 

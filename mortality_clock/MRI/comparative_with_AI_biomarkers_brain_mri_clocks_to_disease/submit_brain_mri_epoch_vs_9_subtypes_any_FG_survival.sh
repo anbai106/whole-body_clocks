@@ -45,6 +45,7 @@ python "${PY_SCRIPT}" \
   --seed 20260818
 
 echo "============================================================"
+echo "Python analysis completed successfully."
 echo "Finished. Key outputs:"
 echo "  ${OUT_DIR}/marker_models_common_sample.tsv"
 echo "  ${OUT_DIR}/epoch_vs_subtype_pairwise.tsv"
