@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --partition=all
+#SBATCH --partition=bioinformatics
 #SBATCH --job-name=BrainEPOCH_vs_9sub_FG
 #SBATCH --mem=32G
 #SBATCH --time=0-11:59:00
