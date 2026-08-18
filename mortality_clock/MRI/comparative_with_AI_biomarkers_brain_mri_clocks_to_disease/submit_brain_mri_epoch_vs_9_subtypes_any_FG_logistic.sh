@@ -7,7 +7,7 @@
 #SBATCH --error=/cbica/home/wenju/output/BrainEPOCH_9sub_logistic_%j.err
 
 module load python/anaconda/3
-source activate DNE
+source activate survival
 
 mkdir -p /cbica/home/wenju/output
 
