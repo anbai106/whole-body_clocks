@@ -425,6 +425,16 @@ p_boot <- ggplot(
 # ------------------------------------------------------------------------------
 # 9. Panel D: EPOCH versus combined nine-subtype panel
 # ------------------------------------------------------------------------------
+# IMPORTANT FIX:
+# The previous version used geom_col() together with scale_y_continuous(limits=...),
+# where the lower y-axis limit was around 0.595. Because geom_col() constructs bars
+# from y = 0 to the observed C-index, ggplot2 treated the bar geometry as outside
+# the scale limits and removed the bars. Only the text labels remained visible.
+#
+# For C-index values that are all close together, a dot/segment plot is also more
+# appropriate than a truncated bar chart because it does not imply a zero baseline.
+# This panel therefore shows each model's absolute C-index as a point, with a short
+# segment from the covariate-only C-index to the model C-index.
 
 c0 <- combined_tbl$base_cindex[[1]]
 ce <- combined_tbl$EPOCH_only_cindex[[1]]
@@ -442,20 +452,22 @@ panel_d_df <- tibble(
       "Covariates + 9 subtypes",
       "Covariates + 9 subtypes + EPOCH"
     ),
-    levels = c(
+    levels = rev(c(
       "Covariates only",
       "Covariates + EPOCH",
       "Covariates + 9 subtypes",
       "Covariates + 9 subtypes + EPOCH"
-    )
+    ))
   ),
   cindex = c(c0, ce, c9, c10),
+  reference_cindex = c0,
   model_group = c(
     "Reference",
     "Mortality EPOCH",
     "AI disease subtype",
     "Combined"
-  )
+  ),
+  cindex_label = sprintf("%.3f", c(c0, ce, c9, c10))
 )
 
 combined_palette <- c(
@@ -467,57 +479,92 @@ combined_palette <- c(
 
 d_min <- min(panel_d_df$cindex, na.rm = TRUE)
 d_max <- max(panel_d_df$cindex, na.rm = TRUE)
+d_span <- d_max - d_min
+
+# Padding for a zoomed but honest point-based C-index comparison.
+d_left <- d_min - max(0.0020, d_span * 0.18)
+d_right <- d_max + max(0.0045, d_span * 0.35)
 
 p_combined <- ggplot(
   panel_d_df,
-  aes(x = model, y = cindex, fill = model_group)
+  aes(y = model)
 ) +
-  geom_col(
-    width = 0.68,
-    color = "grey25",
-    linewidth = 0.25
+  # Covariate-only reference line.
+  geom_vline(
+    xintercept = c0,
+    linetype = "dashed",
+    linewidth = 0.5,
+    color = "grey55"
+  ) +
+  # Segment from the common covariate-only C-index to each model C-index.
+  geom_segment(
+    aes(
+      x = reference_cindex,
+      xend = cindex,
+      yend = model,
+      color = model_group
+    ),
+    linewidth = 1.4,
+    alpha = 0.78
+  ) +
+  geom_point(
+    aes(
+      x = cindex,
+      color = model_group
+    ),
+    size = 3.8
   ) +
   geom_text(
-    aes(label = sprintf("%.3f", cindex)),
-    vjust = -0.45,
-    size = 3.5,
-    fontface = "bold"
+    aes(
+      x = cindex,
+      label = cindex_label
+    ),
+    hjust = -0.55,
+    size = 3.4,
+    fontface = "bold",
+    color = "black"
   ) +
-  scale_fill_manual(values = combined_palette) +
-  scale_y_continuous(
+  scale_color_manual(
+    values = combined_palette
+  ) +
+  scale_x_continuous(
     name = "C-index",
     labels = label_number(accuracy = 0.001),
-    limits = c(
-      max(0, d_min - 0.015),
-      d_max + 0.012
-    ),
-    expand = expansion(mult = c(0, 0.02))
+    breaks = pretty_breaks(n = 5),
+    expand = expansion(mult = c(0, 0))
   ) +
-  scale_x_discrete(
+  scale_y_discrete(
     name = NULL,
     labels = c(
-      "Covariates only" = "Covariates\nonly",
-      "Covariates + EPOCH" = "Covariates\n+ EPOCH",
-      "Covariates + 9 subtypes" = "Covariates\n+ 9 subtypes",
-      "Covariates + 9 subtypes + EPOCH" = "Covariates\n+ 9 subtypes\n+ EPOCH"
+      "Covariates only" = "Covariates only",
+      "Covariates + EPOCH" = "Covariates + EPOCH",
+      "Covariates + 9 subtypes" = "Covariates + 9 subtypes",
+      "Covariates + 9 subtypes + EPOCH" = "Covariates + 9 subtypes\n+ EPOCH"
     )
+  ) +
+  coord_cartesian(
+    xlim = c(d_left, d_right),
+    clip = "off"
   ) +
   labs(
     title = "D  EPOCH versus the combined subtype panel",
     subtitle = paste0(
-      "Adding EPOCH beyond all 9 subtypes: ",
-      "Delta C = ", sprintf("%.3f", delta_epoch_beyond_all9),
+      "EPOCH beyond all 9 subtypes: ",
+      "Delta C = ", sprintf("%+.3f", delta_epoch_beyond_all9),
       "; ", format_p(p_epoch_beyond_all9),
       " (likelihood-ratio test)"
     ),
     caption = paste0(
-      "The likelihood-ratio test evaluates incremental Cox-model fit, ",
-      "not a paired test of C-index superiority."
+      "Dashed line marks the covariate-only C-index. ",
+      "The likelihood-ratio test evaluates incremental Cox-model fit."
     )
   ) +
   theme_epoch() +
   theme(
-    axis.text.x = element_text(size = 9.2, lineheight = 0.95)
+    axis.text.y = element_text(size = 9.3),
+    plot.subtitle = element_text(size = 10.0),
+    plot.caption = element_text(size = 8.5, hjust = 0),
+    plot.margin = margin(8, 22, 12, 8)
   )
 
 # ------------------------------------------------------------------------------
@@ -532,7 +579,7 @@ save_panel <- function(plot_object, stem, width = 8.2, height = 5.7) {
     height = height,
     device = cairo_pdf
   )
-
+  
   ggsave(
     filename = file.path(output_dir, paste0(prefix, "_", stem, ".png")),
     plot = plot_object,
@@ -576,7 +623,7 @@ ggsave(
   filename = file.path(output_dir, paste0(prefix, "_combined_4panel.pdf")),
   plot = combined_figure,
   width = 13.2,
-  height = 10.2,
+  height = 10.8,
   device = cairo_pdf
 )
 
@@ -584,7 +631,7 @@ ggsave(
   filename = file.path(output_dir, paste0(prefix, "_combined_4panel.png")),
   plot = combined_figure,
   width = 13.2,
-  height = 10.2,
+  height = 10.8,
   dpi = 400,
   bg = "white"
 )
